@@ -1,6 +1,4 @@
 import numpy as np
-import torch
-
 
 def deserialize_variable_name(variable_name):
     deserialized_variables = []
