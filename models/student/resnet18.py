@@ -85,7 +85,10 @@ class ResNet18(nn.Module):
             label_tensor[:,_get_value(labels)]=1
             student_output["loss"]  = self.loss(student_output["logits"] , label_tensor)
         
-        # if causal_t_logits is None:
-        #     if t_logits is not None:
+        if causal_t_logits is None:
+            if t_logits is not None:
+                assert t_hidden_states is not None
+                loss = self.loss(s_logits, t_logits)
+                student_output["loss"] += loss
 
         return student_output
