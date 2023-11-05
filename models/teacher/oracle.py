@@ -7,8 +7,12 @@ from utils import _get_value
 class Oracle(nn.Module):
     def __init__(self):
         super().__init__()
-        # 80 xq el input es 80x80 tensores, 10 xq el output es clasificacion de 10 labels 
-        self.model = nn.ModuleList([nn.Linear(80, 10)])
+        # The nn.Flaten is responsible for transforming the data from multidimensional to one dimension only.
+        # 6400 xq el input es 80x80 tensores, 10 xq el output es clasificacion de 10 labels 
+        self.model = nn.ModuleList([
+            nn.Flatten(),
+            nn.Linear(80*80, 10)
+        ])
         self.loss = nn.CrossEntropyLoss()
 
     def forward(
@@ -49,14 +53,18 @@ class Oracle(nn.Module):
                     stop_index = start_index + interchanged_variable[2].stop
                     hidden_states[...,start_index:stop_index] = interchanged_activations
             layer_outputs[-1] = hidden_states
-        # Necesitamos el moduleLayer para el iit pero realmente solo hay una layer
-        pred_scores = self.model[0](input_ids)
-        teacher_ouputs = {}        
+
+        teacher_ouputs = {}
+        teacher_ouputs["hidden_states"]=[]
+        x = self.model[0](input_ids) #flatten
+        teacher_ouputs["hidden_states"].append(x)
+        pred_scores = self.model[1](x) #linear    
+        
         teacher_ouputs["logits"]=pred_scores
-        teacher_ouputs["hidden_states"]=layer_outputs[-1]
+
         if labels is not None:
             label_tensor = torch.zeros(3,10)
             label_tensor[:,_get_value(labels)]=1
-            teacher_ouputs["loss"] = self.loss(teacher_ouputs["logits"].squeeze() , label_tensor.long())
+            teacher_ouputs["loss"] = self.loss(teacher_ouputs["logits"].squeeze() , label_tensor)
 
         return teacher_ouputs
