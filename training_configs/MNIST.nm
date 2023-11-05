@@ -2,10 +2,10 @@
     "interchange_variable_mappings": [
         {
             "teacher_variable_names": [
-                "$L:0$H:[0:1]$[0:80]"
+                "$L:0$H:[0:2]$[0:10]"
             ],
             "student_variable_names": [
-                "$L:0$H:[0:1]$[0:80]"
+                "$L:4$H:[0:2]$[0:10]"
             ]
         }
     ]
