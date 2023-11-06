@@ -43,51 +43,51 @@ class ResNet18(nn.Module):
                 s_hidden_states=None,
                 lm_labels=None
                 ):
-        
+        student_output = {}
+        student_output["hidden_states"]=[]
         # Interchange intervention
-        hidden_state = input_ids
-        for i, layer_module in enumerate(self.model):
-            all_hidden_states = () + (hidden_state,)
+        hidden_state = input_ids.unsqueeze(0)
+        layers = [self.model[0].conv1, self.model[0].layer1, self.model[0].layer2, self.model[0].layer3, self.model[0].layer4]
+        for i, layer_module in enumerate(layers):
             layer_outputs = layer_module(
-                input_ids
+                hidden_state
             )
-            hidden_state = layer_outputs[-1]
-            
+            hidden_state = layer_outputs
             # we need to interchange!
             if variable_names != None and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
-                    start_index = interchanged_variable[1] + interchanged_variable[2].start
-                    stop_index = start_index + interchanged_variable[2].stop
+                    start_index = interchanged_variable[2].start
+                    stop_index = interchanged_variable[2].stop
                     hidden_state[...,start_index:stop_index] = interchanged_activations
-
-            layer_outputs[-1] = hidden_state
+                    #Actually return the interchanged hidden states!!!
+                    student_output["hidden_states"].append(hidden_state)
         
-        student_output = {}
-        student_output["hidden_states"]=[]
-        x = self.model[0].conv1(input_ids)
-        student_output["hidden_states"].append(x)
+        x = self.model[0].conv1(input_ids.unsqueeze(0))
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].layer1(x)
-        student_output["hidden_states"].append(x)
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].layer2(x)
-        student_output["hidden_states"].append(x)
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].layer3(x)
-        student_output["hidden_states"].append(x)
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].layer4(x)
-        student_output["hidden_states"].append(x)
-        x = self.model[0].avgpool(x).squeeze()
-        
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
+        x = self.model[0].avgpool(x)
+        x = torch.flatten(x, 1)
+
         student_output["logits"] = self.model[0].fc(x)
         
         if labels is not None:
-            label_tensor = torch.zeros(3,10)
-            label_tensor[:,_get_value(labels)]=1
-            student_output["loss"]  = self.loss(student_output["logits"] , label_tensor)
+            tensor_labels = torch.zeros((1,10))
+            tensor_labels[0,labels.item()]=1
+            student_output["loss"]  = self.loss(student_output["logits"] , tensor_labels)
         
         if causal_t_logits is None:
             if t_logits is not None:
                 assert t_hidden_states is not None
+                s_logits, _ = student_output["logits"], student_output["hidden_states"]
                 loss = self.loss(s_logits, t_logits)
                 student_output["loss"] += loss
 

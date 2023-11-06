@@ -51,9 +51,9 @@ def get_activation_at(
         layer_index, head_index, LOC = parse_variable_name(
             variable_name=variable
         )
-        head_hidden_states = outputs["hidden_states"][layer_index][
-            :,(head_index):((head_index+1))
-        ]
-        head_slice = head_hidden_states[:,LOC]
+        # head_hidden_states = outputs["hidden_states"][layer_index][
+        #     :,(head_index):((head_index+1))
+        # ]
+        head_slice = outputs["hidden_states"][layer_index][:,LOC]
         activations += [head_slice]
     return activations

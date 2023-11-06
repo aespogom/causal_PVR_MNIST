@@ -39,7 +39,6 @@ class Trainer:
         self.epoch = 0
         self.n_iter = 0
         self.n_total_iter = 0
-        self.n_sequences_epoch = 0
         self.total_loss_epoch = 0
         self.last_loss = 0
         
@@ -116,6 +115,10 @@ class Trainer:
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
                 x, value = batch
+                source = x[0,:]
+                source_labels = value[0]
+                base = x[-1,:]
+                base_labels = value[-1]
 
                 if self.params.n_gpu > 0:
                     # x = x.to(f"cuda:0", non_blocking=True)
@@ -123,8 +126,10 @@ class Trainer:
                     pass
 
                 self.step(
-                    input_ids=x,
-                    labels=value
+                    input_ids=source,
+                    labels=source_labels,
+                    base_ids=base,
+                    base_labels=base_labels
                 )
                 iter_bar.update()
                 iter_bar.set_postfix(
@@ -145,7 +150,9 @@ class Trainer:
     def step(
         self,
         input_ids: torch.tensor, 
-        labels: torch.tensor
+        labels: torch.tensor,
+        base_ids=torch.tensor,
+        base_labels=torch.tensor
     ):
         """
         One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
@@ -157,9 +164,10 @@ class Trainer:
         selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
         interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
         teacher_variable_names = random.choice(interchange_variable_mapping[0])
-        logger.info(f"teacher_variable_names {str(teacher_variable_names)}.")
+        # logger.info(f"teacher_variable_names {str(teacher_variable_names)}.")
+
         student_variable_names = random.choice(interchange_variable_mapping[1])
-        logger.info(f"student_variable_names {str(student_variable_names)}.")
+        # logger.info(f"student_variable_names {str(student_variable_names)}.")
         teacher_interchanged_variables_mapping = {}
         student_interchanged_variables_mapping = {}
         # we need to do the interchange here.
@@ -175,8 +183,8 @@ class Trainer:
                 student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-        logger.info(f"student_interchanged_variables_mapping {str(student_interchanged_variables_mapping)}.")
-        logger.info(f"teacher_interchanged_variables_mapping {str(teacher_interchanged_variables_mapping)}.")
+        # logger.info(f"student_interchanged_variables_mapping {str(student_interchanged_variables_mapping)}.")
+        # logger.info(f"teacher_interchanged_variables_mapping {str(teacher_interchanged_variables_mapping)}.")
         
         counterfactual_input_ids = input_ids
         
@@ -189,7 +197,7 @@ class Trainer:
             
             dual_counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
-                input_ids=input_ids, # this is different!
+                input_ids=base_ids, # this is different!
                 variable_names=teacher_variable_names
             )
             # logger.info(f"dual_counterfactual_activations_teacher {str(dual_counterfactual_activations_teacher)}.")
@@ -217,7 +225,7 @@ class Trainer:
         # we need to get causal distillation loss!
         dual_counterfactual_activations_student = get_activation_at(
             self.student,
-            input_ids, # this is different!
+            base_ids, # this is different!
             variable_names=student_variable_names
         )
         # dual on main.
@@ -226,7 +234,7 @@ class Trainer:
             labels=labels,
             # intervention
             interchanged_variables=dual_counterfactual_activations_student,
-            variable_names=teacher_interchanged_variables_mapping,
+            variable_names=student_interchanged_variables_mapping,
             # loss.
             t_logits=t_logits,
             t_hidden_states=t_hidden_states,
@@ -241,7 +249,6 @@ class Trainer:
             
         self.optimize(counterfactual_outputs_student["loss"])
 
-        self.n_sequences_epoch += input_ids.size(0)
 
     def optimize(self, loss):
         """
@@ -258,18 +265,17 @@ class Trainer:
             loss = loss / self.params.gradient_accumulation_steps
 
         loss.backward()
+        self.n_iter += 1
 
     def end_epoch(self):
         """
         Finally arrived at the end of epoch (full pass on dataset).
         Do some tensorboard logging and checkpoint saving.
         """
-        logger.info(f"{self.n_sequences_epoch} sequences have been trained during this epoch.")
 
-        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}.pth")
+        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}.pth")
 
         self.epoch += 1
-        self.n_sequences_epoch = 0
         self.n_iter = 0
         self.total_loss_epoch = 0
 
@@ -277,8 +283,7 @@ class Trainer:
         """
         Save the current state. Only by the master process.
         """
-        mdl_to_save = self.student.module if hasattr(self.student, "module") else self.student
-        mdl_to_save.config.save_pretrained(self.dump_path)
+        mdl_to_save = self.student.model[0] if hasattr(self.student.model[0], "modules") else self.student
         state_dict = mdl_to_save.state_dict()
         torch.save(state_dict, os.path.join(self.dump_path, checkpoint_name))
 
@@ -348,8 +353,8 @@ if __name__ == "__main__":
         default="training_configs/MNIST.nm",
         help="Predefined neuron mapping for the interchange experiment.",
     )
-    parser.add_argument("--n_epoch", type=int, default=3, help="Number of pass on the whole dataset.")
-    parser.add_argument("--batch_size", type=int, default=5, help="Batch size (for each process).")
+    parser.add_argument("--n_epoch", type=int, default=10, help="Number of pass on the whole dataset.")
+    parser.add_argument("--batch_size", type=int, default=1024, help="Batch size (for each process).")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
