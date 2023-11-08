@@ -47,13 +47,12 @@ class ResNet18(nn.Module):
         student_output["hidden_states"]=[]
         # Interchange intervention
         hidden_state = input_ids.unsqueeze(0)
-        layers = [self.model[0].conv1, self.model[0].layer1, self.model[0].layer2, self.model[0].layer3, self.model[0].layer4]
+        layers = [self.model[0].conv1, self.model[0].maxpool, self.model[0].layer1, self.model[0].layer2, self.model[0].layer3, self.model[0].layer4]
         for i, layer_module in enumerate(layers):
             layer_outputs = layer_module(
                 hidden_state
             )
             hidden_state = layer_outputs
-            # we need to interchange!
             if variable_names != None and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
@@ -64,7 +63,10 @@ class ResNet18(nn.Module):
                     #Actually return the interchanged hidden states!!!
                     student_output["hidden_states"].append(hidden_state)
         
+        # return "normal" activations if not interchange
         x = self.model[0].conv1(input_ids.unsqueeze(0))
+        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
+        x = self.model[0].maxpool(x)
         student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].layer1(x)
         student_output["hidden_states"].append(x) if not interchanged_variables else student_output
@@ -84,6 +86,7 @@ class ResNet18(nn.Module):
             tensor_labels[0,labels.item()]=1
             student_output["loss"]  = self.loss(student_output["logits"] , tensor_labels)
         
+        # Double backward update
         if causal_t_logits is None:
             if t_logits is not None:
                 assert t_hidden_states is not None

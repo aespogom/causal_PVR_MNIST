@@ -42,7 +42,10 @@ class Trainer:
         self.total_loss_epoch = 0
         self.last_loss = 0
         
-        # causal neuron mappings.
+        # Deserialize causal neuron mappings
+        # $L:X$H:Y$[Z:Z+1]
+        # X --> layer number, Y --> head, Z --> location
+        # In our case, we dont have encoder so head is "useless"
         self.deserialized_interchange_variable_mappings = []
         with open(self.neuro_mapping) as json_file:
             neuron_mapping = json.load(json_file)
@@ -59,9 +62,10 @@ class Trainer:
                     [teacher_deserialized_variables, student_deserialized_variables]
                 ]
         logger.info(f"Deserialized interchange variable mappings {str(self.deserialized_interchange_variable_mappings)}.")
-
+        
+        logger.info("--- Dataset loaded")
         self.dataloader = dataset
-
+        logger.info("--- Using Cross Entropy Loss Function")
         self.loss = nn.CrossEntropyLoss()
 
         logger.info("--- Initializing model optimizer")
@@ -123,6 +127,7 @@ class Trainer:
                 if self.params.n_gpu > 0:
                     # x = x.to(f"cuda:0", non_blocking=True)
                     # value = value.to(f"cuda:0", non_blocking=True)
+                    # Until Snellius is available, we skip this
                     pass
 
                 self.step(
@@ -164,13 +169,12 @@ class Trainer:
         selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
         interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
         teacher_variable_names = random.choice(interchange_variable_mapping[0])
-        # logger.info(f"teacher_variable_names {str(teacher_variable_names)}.")
-
         student_variable_names = random.choice(interchange_variable_mapping[1])
-        # logger.info(f"student_variable_names {str(student_variable_names)}.")
+
         teacher_interchanged_variables_mapping = {}
         student_interchanged_variables_mapping = {}
-        # we need to do the interchange here.
+        # we store the interchange here.
+        # we keep head for future implementations but MNIST is not useful
         for i, variable in enumerate(teacher_variable_names):
             layer_index, head_index, LOC = parse_variable_name(variable)
             if layer_index in teacher_interchanged_variables_mapping:
@@ -183,59 +187,58 @@ class Trainer:
                 student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-        # logger.info(f"student_interchanged_variables_mapping {str(student_interchanged_variables_mapping)}.")
-        # logger.info(f"teacher_interchanged_variables_mapping {str(teacher_interchanged_variables_mapping)}.")
-        
-        counterfactual_input_ids = input_ids
         
         with torch.no_grad():
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
-                input_ids=input_ids, labels=labels
+                input_ids=input_ids, # source input
+                labels=labels
             )
+
             # teacher forward pass for interchange variables.
-            
             dual_counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
-                input_ids=base_ids, # this is different!
+                input_ids=base_ids, # this is different! OBTAIN BASE ACTIVATIONS
                 variable_names=teacher_variable_names
             )
-            # logger.info(f"dual_counterfactual_activations_teacher {str(dual_counterfactual_activations_teacher)}.")
+
             # teacher forward pass for interchanged outputs.
             counterfactual_outputs_teacher = self.teacher(
-                input_ids=counterfactual_input_ids, # this is different!
+                input_ids=input_ids, # source inputs 
                 labels=labels,
-                interchanged_variables=dual_counterfactual_activations_teacher,
-                variable_names=teacher_interchanged_variables_mapping,
+                interchanged_variables=dual_counterfactual_activations_teacher, # base activations
+                variable_names=teacher_interchanged_variables_mapping
             )
-            # logger.info(f"counterfactual_outputs_teacher {str(counterfactual_outputs_teacher)}.")
 
         t_logits, t_hidden_states = \
             teacher_outputs["logits"], teacher_outputs["hidden_states"]
+        
+        # student forward pass normal.
         student_outputs = self.student(
-            input_ids=input_ids,
+            input_ids=input_ids, # source input
             labels=labels,
             t_logits=t_logits,
             t_hidden_states=t_hidden_states,
-        )  # (bs, seq_length, voc_size)
+        )
         s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
         causal_t_logits, causal_t_hidden_states = \
             counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        #falta sumar losss de aqui
-        # we need to get causal distillation loss!
+
+        # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
             self.student,
-            base_ids, # this is different!
+            base_ids, # this is different! OBTAIN BASE ACTIVATIONS
             variable_names=student_variable_names
         )
-        # dual on main.
+
+        # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
-            input_ids=counterfactual_input_ids, # this is different!
+            input_ids=input_ids, # source input
             labels=labels,
             # intervention
-            interchanged_variables=dual_counterfactual_activations_student,
+            interchanged_variables=dual_counterfactual_activations_student, # base activations
             variable_names=student_interchanged_variables_mapping,
-            # loss.
+            # backward loss.
             t_logits=t_logits,
             t_hidden_states=t_hidden_states,
             causal_t_logits=causal_t_logits,
@@ -291,14 +294,7 @@ def prepare_trainer(args):
 
     # ARGS #
     set_seed(args)
-    # More validations #
     
-    # if not args.force:
-    #     raise ValueError(
-    #         f"Serialization dir {args.dump_path} already exists, but you have not precised wheter to overwrite it"
-    #         "Use `--force` if you want to overwrite it"
-    #     )
-    # else:
     shutil.rmtree(args.dump_path)
 
     if not os.path.exists(args.dump_path):
