@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import json
 import random
 import torch
@@ -9,6 +10,7 @@ import math
 import os
 import time
 import shutil
+import numpy as np
 
 from tqdm import tqdm
 from counterfactual_utils import deserialize_variable_name, parse_variable_name, get_activation_at
@@ -25,6 +27,7 @@ class Trainer:
         self,
         params: dict,
         dataset: BlockStylePVR, 
+        val_dataset: BlockStylePVR,
         neuro_mapping: str,
         student: nn.Module,
         teacher: nn.Module
@@ -41,6 +44,8 @@ class Trainer:
         self.n_total_iter = 0
         self.total_loss_epoch = 0
         self.last_loss = 0
+        self.total_acc_epoch = 0
+        self.last_acc = 0
         
         # Deserialize causal neuron mappings
         # $L:X$H:Y$[Z:Z+1]
@@ -65,6 +70,7 @@ class Trainer:
         
         logger.info("--- Dataset loaded")
         self.dataloader = dataset
+        self.val_dataloader = val_dataset
         logger.info("--- Using Cross Entropy Loss Function")
         self.loss = nn.CrossEntropyLoss()
 
@@ -140,7 +146,9 @@ class Trainer:
                 iter_bar.set_postfix(
                     {
                         "Last_loss": f"{self.last_loss:.2f}", 
-                        "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}"
+                        "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
+                        "Last_acc": f'{self.last_acc:.2f}',
+                        "Avg_cum_acc": f"{self.total_acc_epoch/self.n_iter:.2f}"
                     }
                 )
             iter_bar.close()
@@ -249,6 +257,10 @@ class Trainer:
                 
         self.total_loss_epoch += counterfactual_outputs_student["loss"].item()
         self.last_loss = counterfactual_outputs_student["loss"].item()
+
+        acc = self.ii_accuracy(student_variable_names, student_interchanged_variables_mapping)
+        self.total_acc_epoch += acc
+        self.last_acc = acc
             
         self.optimize(counterfactual_outputs_student["loss"])
 
@@ -270,17 +282,47 @@ class Trainer:
         loss.backward()
         self.n_iter += 1
 
+    def ii_accuracy(self, student_variable_names, student_interchanged_variables_mapping):
+        labels = []
+        predictions = []
+        self.student.eval()
+        for batch in self.val_dataloader:
+            x, value = batch
+            source = x[0,:]
+            source_labels = value[0]
+            base = x[-1,:]
+            base_labels = value[-1]
+            # Run the neural model with the intervention:
+            dual_counterfactual_activations_student = get_activation_at(
+                self.student,
+                base, # this is different! OBTAIN BASE ACTIVATIONS
+                variable_names=student_variable_names
+            )
+            outputs_student = self.student(
+                input_ids=source, # source input
+                # intervention
+                interchanged_variables=dual_counterfactual_activations_student, # base activations
+                variable_names=student_interchanged_variables_mapping
+            )
+            # Get the neural model's prediction with the intervention:
+            pred = outputs_student['logits'].argmax(axis=1)
+            predictions.append(int(pred))
+            labels.append(source_labels)
+        return np.sum(np.equal(predictions,labels))/len(labels)
+        
+    
     def end_epoch(self):
         """
         Finally arrived at the end of epoch (full pass on dataset).
         Do some tensorboard logging and checkpoint saving.
         """
 
-        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}.pth")
+        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}_acc_{self.total_acc_epoch/self.n_iter:.2f}.pth")
 
         self.epoch += 1
         self.n_iter = 0
         self.total_loss_epoch = 0
+        self.total_acc_epoch = 0
 
     def save_checkpoint(self, checkpoint_name: str = "checkpoint.pth"):
         """
@@ -314,7 +356,7 @@ def prepare_trainer(args):
     logger.info("Teacher loaded.")
 
     # DATA LOADER
-    train_dataset, _ = setup_loaders()
+    train_dataset, val_dataset = setup_loaders()
     logger.info("Data loader created.")
 
     # TRAINER #
@@ -322,6 +364,7 @@ def prepare_trainer(args):
     trainer = Trainer(
         params=args,
         dataset=train_dataset,
+        val_dataset=val_dataset,
         neuro_mapping=args.neuro_mapping,
         student=student_model,
         teacher=teacher_model
