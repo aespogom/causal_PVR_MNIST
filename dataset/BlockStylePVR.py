@@ -116,13 +116,13 @@ def setup_loaders():
 
     shuffle = False
     # Aumentar size para dataset completo
-    train_ds = BlockStylePVR(train=True)
+    train_ds = BlockStylePVR(train=True, size=100)
     train_loader = DataLoader(train_ds, batch_size=2,
                               pin_memory=True,
                               num_workers=num_workers,
                               shuffle=shuffle)
 
-    val_ds = BlockStylePVR(train=False)
+    val_ds = BlockStylePVR(train=False, size=100)
     val_loader = DataLoader(val_ds, batch_size=2,
                             pin_memory=True,
                             num_workers=num_workers)

@@ -280,34 +280,43 @@ class Trainer:
             loss = loss / self.params.gradient_accumulation_steps
 
         loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.scheduler.step()
         self.n_iter += 1
+        self.n_total_iter += 1
+        if self.n_iter % self.params.gradient_accumulation_steps == 0:
+            nn.utils.clip_grad_norm_(self.student.parameters(), self.params.max_grad_norm)
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.scheduler.step()
 
     def ii_accuracy(self, student_variable_names, student_interchanged_variables_mapping):
         labels = []
         predictions = []
-        self.student.eval()
-        for batch in self.val_dataloader:
-            x, value = batch
-            source = x[0,:]
-            source_labels = value[0]
-            base = x[-1,:]
-            base_labels = value[-1]
-            # Run the neural model with the intervention:
-            dual_counterfactual_activations_student = get_activation_at(
-                self.student,
-                base, # this is different! OBTAIN BASE ACTIVATIONS
-                variable_names=student_variable_names
-            )
-            outputs_student = self.student(
-                input_ids=source, # source input
-                # intervention
-                interchanged_variables=dual_counterfactual_activations_student, # base activations
-                variable_names=student_interchanged_variables_mapping
-            )
-            # Get the neural model's prediction with the intervention:
-            pred = outputs_student['logits'].argmax(axis=1)
-            predictions.append(int(pred))
-            labels.append(source_labels)
+        with torch.no_grad():
+            for batch in self.val_dataloader:
+                x, value = batch
+                source = x[0,:]
+                source_labels = value[0]
+                base = x[-1,:]
+                base_labels = value[-1]
+                # Run the neural model with the intervention:
+                dual_counterfactual_activations_student = get_activation_at(
+                    self.student,
+                    base, # this is different! OBTAIN BASE ACTIVATIONS
+                    variable_names=student_variable_names
+                )
+                outputs_student = self.student(
+                    input_ids=source, # source input
+                    # intervention
+                    interchanged_variables=dual_counterfactual_activations_student, # base activations
+                    variable_names=student_interchanged_variables_mapping
+                )
+                # Get the neural model's prediction with the intervention:
+                pred = outputs_student['logits'].argmax(axis=1)
+                predictions.append(int(pred))
+                labels.append(source_labels)
         return np.sum(np.equal(predictions,labels))/len(labels)
         
     
