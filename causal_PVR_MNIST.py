@@ -104,7 +104,7 @@ class Trainer:
         )
         logger.info("------ Number of parameters (student): %i" % sum([p.numel() for p in self.student.parameters()]))
         self.optimizer = AdamW(
-            optimizer_grouped_parameters, lr=0.05, eps=1e-06, betas=(0.9, 0.98)
+            optimizer_grouped_parameters, lr=0.1, eps=1e-06, betas=(0.9, 0.98)
         )
 
         warmup_steps = math.ceil(num_train_optimization_steps * 0.05)
@@ -129,7 +129,7 @@ class Trainer:
                 source = x[0,:]
                 source_labels = value[0]
                 base = x[-1,:]
-                base_labels = value[-1]
+                # base_labels = value[-1]
 
                 if self.params.n_gpu > 0:
                     # x = x.to(f"cuda:0", non_blocking=True)
@@ -276,9 +276,6 @@ class Trainer:
             loss = loss / self.params.gradient_accumulation_steps
 
         loss.backward()
-        self.optimizer.step()
-        self.optimizer.zero_grad()
-        self.scheduler.step()
         self.n_iter += 1
         self.n_total_iter += 1
         if self.n_iter % self.params.gradient_accumulation_steps == 0:

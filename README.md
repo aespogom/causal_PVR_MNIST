@@ -64,8 +64,7 @@ Both models, student and teacher are placed at ```CAUSAL_PVR_MNIST/models/```.
 - In the case of the teacher, an oracle model is implemented as a look-up table. 
 
 The required configurations are placed at ```CAUSAL_PVR_MNIST/training_configs/```. 
-- ```/MNIST.nm``` provides the required information for the interchange interventions. 
-- ```/config_MNIST.yaml``` provides the required configuration for the training. 
+- ```/MNIST.nm``` provides the required information for the interchange interventions.
 
 The final weights for the student model are stored in ```CAUSAL_PVR_MNIST/results/```
 
