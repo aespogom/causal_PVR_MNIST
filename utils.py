@@ -21,7 +21,9 @@ def set_seed(args):
 
 def _get_value(labels):
     """
-    get the value based on the pointer
+    The top left image iTL acts as a pointer that picks out one of the three
+    other images.
+    Gets the value based on the pointer
 
     Args:
         labels: a tensor of length 4. where labels[0] is the pointer

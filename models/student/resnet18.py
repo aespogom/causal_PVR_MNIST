@@ -1,6 +1,7 @@
 import torch
 import torchvision.models as models
 from torch import nn
+from counterfactual_utils import interchange_hook
 from utils import _get_value
 
 ## STUDENT MODEL
@@ -46,52 +47,54 @@ class ResNet18(nn.Module):
         student_output = {}
         student_output["hidden_states"]=[]
         # Interchange intervention
-        hidden_state = input_ids.unsqueeze(0)
+        x = input_ids.unsqueeze(0)
         layers = [self.model[0].conv1, self.model[0].maxpool, self.model[0].layer1, self.model[0].layer2, self.model[0].layer3, self.model[0].layer4]
+        hooks = []
         for i, layer_module in enumerate(layers):
-            layer_outputs = layer_module(
-                hidden_state
-            )
-            hidden_state = layer_outputs
             if variable_names != None and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
-                    start_index = interchanged_variable[2].start
-                    stop_index = interchanged_variable[2].stop
-                    hidden_state[...,start_index:stop_index] = interchanged_activations
-                    #Actually return the interchanged hidden states!!!
-                    student_output["hidden_states"].append(hidden_state)
+                    #https://web.stanford.edu/~nanbhas/blog/forward-hooks-pytorch/#method-3-attach-a-hook AND interchange_with_activation_at()
+                    hook = layer_module.register_forward_hook(interchange_hook(interchanged_variable, interchanged_activations))
+                    hooks.append(hook)
+            x = layer_module(
+                x
+            )
+            student_output["hidden_states"].append(x)
         
-        # return "normal" activations if not interchange
-        x = self.model[0].conv1(input_ids.unsqueeze(0))
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
-        x = self.model[0].maxpool(x)
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
-        x = self.model[0].layer1(x)
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
-        x = self.model[0].layer2(x)
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
-        x = self.model[0].layer3(x)
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
-        x = self.model[0].layer4(x)
-        student_output["hidden_states"].append(x) if not interchanged_variables else student_output
         x = self.model[0].avgpool(x)
         x = torch.flatten(x, 1)
-
-        student_output["logits"] = self.model[0].fc(x)
+        student_output["logits"] = nn.Softmax(dim=1)(self.model[0].fc(x))
         
-        if labels is not None:
-            tensor_labels = torch.zeros((1,10))
-            tensor_labels[0,labels.item()]=1
-            student_output["loss"]  = self.loss(student_output["logits"] , tensor_labels)
+        # This part is only teacher
+        # # if labels is not None:
+        # #     tensor_labels = torch.zeros((1,10))
+        # #     tensor_labels[0,labels.item()]=1
+        # #     student_output["loss"]  = self.loss(student_output["logits"] , tensor_labels)
         
-        # Double backward update
+        # IIT Objective
+        # For each intermediate variable Yw ∈ {YTL, YTR, YBL, YBR}, we introduce an IIT
+        #    objective that optimizes for N implementing Cw the
+        #    submodel of C where the three intermediate variables
+        #    that aren’t Yw are marginalized out:
+        #     sum[ CE(Cw intinv, N intinv)]
         if causal_t_logits is None:
+            # if it is None, it is simply a forward for getting hidden states!
             if t_logits is not None:
                 assert t_hidden_states is not None
                 s_logits, _ = student_output["logits"], student_output["hidden_states"]
                 loss = self.loss(s_logits, t_logits)
-                student_output["loss"] += loss
+                student_output["loss"] = loss
+        else:
+            # causal distillation loss.
+            causal_s_logits, causal_s_hidden_states = \
+                student_output["logits"], student_output["hidden_states"]
+            loss = self.loss(causal_s_logits, causal_t_logits)
+            student_output["loss"] = loss
+
+        
+        for h in hooks:
+            h.remove()
 
         return student_output

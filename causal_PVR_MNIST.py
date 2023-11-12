@@ -116,14 +116,13 @@ class Trainer:
         """
         logger.info("Starting training")
         self.last_log = time.time()
-        self.student.train()
         self.teacher.eval()
 
         for _ in range(self.params.n_epoch):
             logger.info(f"--- Starting epoch {self.epoch}/{self.params.n_epoch-1}")
-
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
+                self.student.train()
                 x, value = batch
                 source = x[0,:]
                 source_labels = value[0]
@@ -184,17 +183,17 @@ class Trainer:
         # we store the interchange here.
         # we keep head for future implementations but MNIST is not useful
         for i, variable in enumerate(teacher_variable_names):
-            layer_index, head_index, LOC = parse_variable_name(variable)
+            layer_index, LOC = parse_variable_name(variable)
             if layer_index in teacher_interchanged_variables_mapping:
-                teacher_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+                teacher_interchanged_variables_mapping[layer_index] += [(i, LOC)]
             else:
-                teacher_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+                teacher_interchanged_variables_mapping[layer_index] = [(i, LOC)]
         for i, variable in enumerate(student_variable_names):
-            layer_index, head_index, LOC = parse_variable_name(variable)
+            layer_index, LOC = parse_variable_name(variable)
             if layer_index in student_interchanged_variables_mapping:
-                student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+                student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
             else:
-                student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+                student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
         
         with torch.no_grad():
             # teacher forward pass normal.
@@ -254,15 +253,13 @@ class Trainer:
             s_logits=s_logits,
             s_hidden_states=s_hidden_states,
         )
-                
-        self.total_loss_epoch += counterfactual_outputs_student["loss"].item()
-        self.last_loss = counterfactual_outputs_student["loss"].item()
 
-        acc = self.ii_accuracy(student_variable_names, student_interchanged_variables_mapping)
-        self.total_acc_epoch += acc
-        self.last_acc = acc
-            
+        self.last_loss = counterfactual_outputs_student["loss"].item()
+        self.total_loss_epoch += self.last_loss
         self.optimize(counterfactual_outputs_student["loss"])
+
+        self.last_acc = self.ii_accuracy(student_variable_names, student_interchanged_variables_mapping)
+        self.total_acc_epoch += self.last_acc
 
 
     def optimize(self, loss):
@@ -286,7 +283,7 @@ class Trainer:
         self.n_iter += 1
         self.n_total_iter += 1
         if self.n_iter % self.params.gradient_accumulation_steps == 0:
-            nn.utils.clip_grad_norm_(self.student.parameters(), self.params.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.student.parameters(), 5.0)
             self.optimizer.step()
             self.optimizer.zero_grad()
             self.scheduler.step()
@@ -295,6 +292,7 @@ class Trainer:
         labels = []
         predictions = []
         with torch.no_grad():
+            self.student.eval()
             for batch in self.val_dataloader:
                 x, value = batch
                 source = x[0,:]
