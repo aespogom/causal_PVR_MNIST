@@ -30,19 +30,14 @@ class ResNet18(nn.Module):
 
     def forward(self,
                 input_ids,
-                labels=None,
                 # for interchange.
                 interchanged_variables=None, 
                 variable_names=None,
                 interchanged_activations=None,
                 # # losses
                 t_logits=None,
-                t_hidden_states=None,
                 causal_t_logits=None,
-                causal_t_hidden_states=None,
-                s_logits=None,
-                s_hidden_states=None,
-                lm_labels=None
+                s_logits=None
                 ):
         student_output = {}
         student_output["hidden_states"]=[]
@@ -82,13 +77,12 @@ class ResNet18(nn.Module):
         if causal_t_logits is None:
             # if it is None, it is simply a forward for getting hidden states!
             if t_logits is not None:
-                assert t_hidden_states is not None
                 s_logits, _ = student_output["logits"], student_output["hidden_states"]
                 loss = self.loss(s_logits, t_logits)
                 student_output["loss"] = loss
         else:
-            # causal distillation loss.
-            causal_s_logits, causal_s_hidden_states = \
+            # causal loss.
+            causal_s_logits, _ = \
                 student_output["logits"], student_output["hidden_states"]
             loss = self.loss(causal_s_logits, causal_t_logits)
             student_output["loss"] = loss

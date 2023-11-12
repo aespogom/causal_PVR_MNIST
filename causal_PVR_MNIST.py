@@ -138,8 +138,7 @@ class Trainer:
                 self.step(
                     input_ids=source,
                     labels=source_labels,
-                    base_ids=base,
-                    base_labels=base_labels
+                    base_ids=base
                 )
                 iter_bar.update()
                 iter_bar.set_postfix(
@@ -163,8 +162,7 @@ class Trainer:
         self,
         input_ids: torch.tensor, 
         labels: torch.tensor,
-        base_ids=torch.tensor,
-        base_labels=torch.tensor
+        base_ids=torch.tensor
     ):
         """
         One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
@@ -217,18 +215,16 @@ class Trainer:
                 variable_names=teacher_interchanged_variables_mapping
             )
 
-        t_logits, t_hidden_states = \
+        t_logits, _ = \
             teacher_outputs["logits"], teacher_outputs["hidden_states"]
         
         # student forward pass normal.
         student_outputs = self.student(
             input_ids=input_ids, # source input
-            labels=labels,
-            t_logits=t_logits,
-            t_hidden_states=t_hidden_states,
+            t_logits=t_logits
         )
-        s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
-        causal_t_logits, causal_t_hidden_states = \
+        s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
+        causal_t_logits, _ = \
             counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
 
         # student forward pass for interchange variables.
@@ -241,17 +237,13 @@ class Trainer:
         # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
             input_ids=input_ids, # source input
-            labels=labels,
             # intervention
             interchanged_variables=dual_counterfactual_activations_student, # base activations
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
             t_logits=t_logits,
-            t_hidden_states=t_hidden_states,
             causal_t_logits=causal_t_logits,
-            causal_t_hidden_states=causal_t_hidden_states,
-            s_logits=s_logits,
-            s_hidden_states=s_hidden_states,
+            s_logits=s_logits
         )
 
         self.last_loss = counterfactual_outputs_student["loss"].item()
@@ -298,7 +290,6 @@ class Trainer:
                 source = x[0,:]
                 source_labels = value[0]
                 base = x[-1,:]
-                base_labels = value[-1]
                 # Run the neural model with the intervention:
                 dual_counterfactual_activations_student = get_activation_at(
                     self.student,
