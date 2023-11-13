@@ -60,7 +60,11 @@ class ResNet18(nn.Module):
         
         x = self.model[0].avgpool(x)
         x = torch.flatten(x, 1)
-        student_output["logits"] = nn.Softmax(dim=1)(self.model[0].fc(x))
+        student_output["logits"] = self.model[0].fc(x)
+
+        ## Origin code uses softmax before loss because they use KL divergence loss
+        ## But this is not the case for crossentropy
+        # student_output["logits"] = nn.Softmax(dim=1)(self.model[0].fc(x))
         
         # This part is only teacher
         # # if labels is not None:

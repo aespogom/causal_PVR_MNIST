@@ -183,7 +183,6 @@ class Trainer:
         teacher_interchanged_variables_mapping = {}
         student_interchanged_variables_mapping = {}
         # we store the interchange here.
-        # we keep head for future implementations but MNIST is not useful
         for i, variable in enumerate(teacher_variable_names):
             layer_index, LOC = parse_variable_name(variable)
             if layer_index in teacher_interchanged_variables_mapping:
@@ -324,7 +323,7 @@ class Trainer:
                     variable_names=student_interchanged_variables_mapping
                 )
                 # Get the neural model's prediction with the intervention:
-                pred = outputs_student['logits'].argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
                 predictions.append(int(pred))
             return np.sum(np.equal(predictions,labels))/len(labels)
     
@@ -348,7 +347,7 @@ class Trainer:
                     input_ids=source # source input
                 )
                 # Get the neural model's prediction
-                pred = outputs_student['logits'].argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
                 predictions.append(int(pred))
 
                 # Run the causal model:
@@ -361,7 +360,7 @@ class Trainer:
                     input_ids=base # base input
                 )
                 # Get the neural model's prediction
-                pred = outputs_student['logits'].argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
                 predictions.append(int(pred))
 
             return np.sum(np.equal(predictions,labels))/len(labels)
@@ -454,7 +453,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=50,
+        default=5,
         help="Gradient accumulation for larger training batches.",
     )
     parser.add_argument("--n_gpu", type=int, default=1, help="Number of GPUs in the node.")
