@@ -28,7 +28,9 @@ class BlockStylePVR(Dataset):
                  mode: str = "iid",
                  size: int = None):
         """
-
+        The train/test split designed by Zhang et al. (2021) creates a distributional shift between
+            the training and testing data by removing training examples where either OMNIST(iTR) ∈ {1, 2, 3}, OMNIST(iBL) ∈
+            {4, 5, 6}, or OMNIST(iBR) ∈ {0, 7, 8, 9}.
         Args:
             train: whether to use MNIST train set, else use the test set.
             mode: "holdout" or "adversarial" or "iid".
@@ -86,6 +88,8 @@ class BlockStylePVR(Dataset):
             raise ValueError("Unknown dataset mode.")
 
     def __getitem__(self, idx):
+        """An input i = (iTL, iTR, iBL, iBR) consists of four MNIST
+        images (handwritten digits) arranged in a grid."""
         labels = self.labels[idx]
         idxs = self.idxs[idx]
 
@@ -116,13 +120,13 @@ def setup_loaders():
 
     shuffle = False
     # Aumentar size para dataset completo
-    train_ds = BlockStylePVR(train=True, size=100)
+    train_ds = BlockStylePVR(train=True, size=50)
     train_loader = DataLoader(train_ds, batch_size=2,
                               pin_memory=True,
                               num_workers=num_workers,
                               shuffle=shuffle)
 
-    val_ds = BlockStylePVR(train=False, size=100)
+    val_ds = BlockStylePVR(train=False, size=50)
     val_loader = DataLoader(val_ds, batch_size=2,
                             pin_memory=True,
                             num_workers=num_workers)
