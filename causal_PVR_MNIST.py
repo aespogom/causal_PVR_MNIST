@@ -270,7 +270,7 @@ class Trainer:
         dual_causal_t_logits, _ = \
             counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
         
-        self.last_loss += student_outputs["loss"].item()
+        self.last_loss = student_outputs["loss"].item()
         self.last_loss += dual_student_outputs["loss"].item()
         
         # student forward pass for interchange variables.
