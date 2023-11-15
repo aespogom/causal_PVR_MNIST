@@ -23,20 +23,17 @@ class Oracle(nn.Module):
     def __init__(self):
         super().__init__()
         # Oracle lookup
-        FY_topleft = nn.Conv2d(1, 10, 40)
-        FY_topright = nn.Conv2d(1, 10, 40)
-        FY_bottomleft = nn.Conv2d(1, 10, 40)
-        FY_bottomright = nn.Conv2d(1, 10, 40)
+        self.model = self.oracle_look_up_table
+        self.loss = nn.MSELoss()
 
-        self.model = nn.ModuleList([
-            FY_topleft, FY_topright, FY_bottomleft, FY_bottomright
-        ])
-        self.loss = nn.CrossEntropyLoss()
+    def oracle_look_up_table(self, index, look_up):
+        return look_up[index]
 
     def forward(
         self,
         input_ids,
         labels=None,
+        look_up = None,
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
@@ -60,27 +57,22 @@ class Oracle(nn.Module):
         teacher_ouputs["hidden_states"]=[]
         # we perform the interchange intervention
         hooks = []
-        for i, layer_module in enumerate(self.model):
-            x = list_inputs[i]
+        for i, x in enumerate(list_inputs):
+            x = self.oracle_look_up_table(i, look_up)
             # we need to interchange!
             if variable_names != None and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
-                    #https://web.stanford.edu/~nanbhas/blog/forward-hooks-pytorch/#method-3-attach-a-hook AND interchange_with_activation_at()
-                    hook = layer_module.register_forward_hook(interchange_hook(interchanged_variable,interchanged_activations))
-                    hooks.append(hook)
+                    x = interchanged_activations
             
-            x = layer_module(
-                x
-            )
             teacher_ouputs["hidden_states"].append(x)
         
         FO = _get_value([
-            teacher_ouputs["hidden_states"][0].argmax(axis=1), # FY_topleft
-            teacher_ouputs["hidden_states"][1].argmax(axis=1), # FY_topright
-            teacher_ouputs["hidden_states"][2].argmax(axis=1), # FY_bottomleft
-            teacher_ouputs["hidden_states"][3].argmax(axis=1)  # FY_bottomright
+            teacher_ouputs["hidden_states"][0], # FY_topleft
+            teacher_ouputs["hidden_states"][1], # FY_topright
+            teacher_ouputs["hidden_states"][2], # FY_bottomleft
+            teacher_ouputs["hidden_states"][3]  # FY_bottomright
         ])
         tensor_preds = torch.zeros((1,10))
         tensor_preds[0,FO.item()]=1

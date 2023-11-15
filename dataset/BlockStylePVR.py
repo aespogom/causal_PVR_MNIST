@@ -105,7 +105,7 @@ class BlockStylePVR(Dataset):
         # calculate the value based on the pointer
         value = _get_value(labels)
 
-        return x, value
+        return x, value, labels
 
     def __len__(self):
         return self.pvr_ds_size

@@ -125,11 +125,13 @@ class Trainer:
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
                 self.student.train()
-                x, value = batch
+                x, value, batch_labels = batch
                 source = x[0,:]
                 source_labels = value[0]
+                look_up_source = batch_labels[0,:]
                 base = x[-1,:]
                 # base_labels = value[-1]
+                look_up_base = batch_labels[-1,:]
 
                 if self.params.n_gpu > 0:
                     # x = x.to(f"cuda:0", non_blocking=True)
@@ -140,7 +142,9 @@ class Trainer:
                 self.step(
                     input_ids=source,
                     labels=source_labels,
-                    base_ids=base
+                    base_ids=base,
+                    look_up_source=look_up_source,
+                    look_up_base=look_up_base
                 )
                 iter_bar.update()
                 iter_bar.set_postfix(
@@ -166,7 +170,9 @@ class Trainer:
         self,
         input_ids: torch.tensor, 
         labels: torch.tensor,
-        base_ids=torch.tensor
+        look_up_source,
+        base_ids: torch.tensor,
+        look_up_base
     ):
         """
         One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
@@ -200,20 +206,23 @@ class Trainer:
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
                 input_ids=input_ids, # source input
-                labels=labels
+                labels=labels,
+                look_up = look_up_source
             )
 
             # teacher forward pass for interchange variables.
             dual_counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
                 input_ids=base_ids, # this is different! OBTAIN BASE ACTIVATIONS
-                variable_names=teacher_variable_names
+                variable_names=teacher_variable_names,
+                look_up = look_up_base
             )
 
             # teacher forward pass for interchanged outputs.
             counterfactual_outputs_teacher = self.teacher(
                 input_ids=input_ids, # source inputs 
                 labels=labels,
+                look_up = look_up_source,
                 interchanged_variables=dual_counterfactual_activations_teacher, # base activations
                 variable_names=teacher_interchanged_variables_mapping
             )
@@ -293,17 +302,21 @@ class Trainer:
         with torch.no_grad():
             self.student.eval()
             for batch in self.val_dataloader:
-                x, _ = batch
+                x, _, batch_labels = batch
                 source = x[0,:]
+                look_up_source = batch_labels[0,:]
                 base = x[-1,:]
+                look_up_base = batch_labels[-1,:]
                 # Run the causal model with the intervention:
                 dual_counterfactual_activations_teacher = get_activation_at(
                     self.teacher,
                     base, # this is different! OBTAIN BASE ACTIVATIONS
-                    variable_names=teacher_variable_names
+                    variable_names=teacher_variable_names,
+                    look_up=look_up_base
                 )
                 outputs_teacher = self.teacher(
                     input_ids=source, # source input
+                    look_up=look_up_source,
                     # intervention
                     interchanged_variables=dual_counterfactual_activations_teacher, # base activations
                     variable_names=teacher_interchanged_variables_mapping
@@ -323,7 +336,7 @@ class Trainer:
                     variable_names=student_interchanged_variables_mapping
                 )
                 # Get the neural model's prediction with the intervention:
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
                 predictions.append(int(pred))
             return np.sum(np.equal(predictions,labels))/len(labels)
     
@@ -334,12 +347,15 @@ class Trainer:
         with torch.no_grad():
             self.student.eval()
             for batch in self.val_dataloader:
-                x, _ = batch
+                x, _, batch_labels = batch
                 source = x[0,:]
+                look_up_source = batch_labels[0,:]
                 base = x[-1,:]
+                look_up_base = batch_labels[-1,:]
                 # Run the causal model:
                 outputs_teacher = self.teacher(
-                    input_ids=source # source input
+                    input_ids=source, # source input
+                    look_up=look_up_source
                 )
                 labels.append(int(outputs_teacher["logits"].argmax(dim=1)))
                 # Run the neural model:
@@ -347,12 +363,13 @@ class Trainer:
                     input_ids=source # source input
                 )
                 # Get the neural model's prediction
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
                 predictions.append(int(pred))
 
                 # Run the causal model:
                 outputs_teacher = self.teacher(
-                    input_ids=base # base input
+                    input_ids=base, # base input
+                    look_up=look_up_base
                 )
                 labels.append(int(outputs_teacher["logits"].argmax(dim=1)))
                 # Run the neural model:
@@ -360,7 +377,7 @@ class Trainer:
                     input_ids=base # base input
                 )
                 # Get the neural model's prediction
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(axis=1)
+                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
                 predictions.append(int(pred))
 
             return np.sum(np.equal(predictions,labels))/len(labels)
@@ -453,7 +470,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=5,
+        default=1,
         help="Gradient accumulation for larger training batches.",
     )
     parser.add_argument("--n_gpu", type=int, default=1, help="Number of GPUs in the node.")
