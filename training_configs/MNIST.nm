@@ -2,15 +2,33 @@
     "interchange_variable_mappings": [
         {
             "teacher_variable_names": [
-                "$L:0$[:,:]",
-                "$L:1$[:,:]",
-                "$L:2$[:,:]",
+                "$L:0$[:,:]"
+            ],
+            "student_variable_names": [
+                "$L:1$[:10,:10]"
+            ]
+        },
+        {
+            "teacher_variable_names": [
+                "$L:1$[:,:]"
+            ],
+            "student_variable_names": [
+                "$L:1$[:10,10:]"
+            ]
+        },
+        {
+            "teacher_variable_names": [
+                "$L:2$[:,:]"
+            ],
+            "student_variable_names": [
+                "$L:1$[10:,:10]"
+            ]
+        },
+        {
+            "teacher_variable_names": [
                 "$L:3$[:,:]"
             ],
             "student_variable_names": [
-                "$L:1$[:10,:10]",
-                "$L:1$[:10,10:]",
-                "$L:1$[10:,:10]",
                 "$L:1$[10:,10:]"
             ]
         }
