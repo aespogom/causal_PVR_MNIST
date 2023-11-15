@@ -1,4 +1,5 @@
 __pycache__/
 data/
 results/*
+outputs/*
 results/s_resnet18_t_oracle_data_MNIST_seed_56/parameters.json
