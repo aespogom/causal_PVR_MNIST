@@ -1,8 +1,6 @@
 ## TEACHER MODEL
 import torch
 from torch import nn
-from counterfactual_utils import interchange_hook
-
 from utils import _get_value
 
 class Oracle(nn.Module):
@@ -77,12 +75,6 @@ class Oracle(nn.Module):
         tensor_preds = torch.zeros((1,10))
         tensor_preds[0,FO.item()]=1
         teacher_ouputs["logits"]=tensor_preds
-
-        if labels is not None:
-            tensor_labels = torch.zeros((1,10))
-            tensor_labels[0,labels.item()]=1
-
-            teacher_ouputs["loss"] = self.loss(teacher_ouputs["logits"], tensor_labels)
 
         for h in hooks:
             h.remove()

@@ -36,8 +36,7 @@ class ResNet18(nn.Module):
                 interchanged_activations=None,
                 # # losses
                 t_logits=None,
-                causal_t_logits=None,
-                s_logits=None
+                causal_t_logits=None
                 ):
         student_output = {}
         student_output["hidden_states"]=[]

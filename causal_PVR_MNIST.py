@@ -130,7 +130,7 @@ class Trainer:
                 source_labels = value[0]
                 look_up_source = batch_labels[0,:]
                 base = x[-1,:]
-                # base_labels = value[-1]
+                base_labels = value[-1]
                 look_up_base = batch_labels[-1,:]
 
                 if self.params.n_gpu > 0:
@@ -140,9 +140,10 @@ class Trainer:
                     pass
 
                 self.step(
-                    input_ids=source,
-                    labels=source_labels,
+                    source_ids=source,
+                    source_labels=source_labels,
                     base_ids=base,
+                    base_labels=base_labels,
                     look_up_source=look_up_source,
                     look_up_base=look_up_base
                 )
@@ -168,10 +169,11 @@ class Trainer:
 
     def step(
         self,
-        input_ids: torch.tensor, 
-        labels: torch.tensor,
+        source_ids: torch.tensor, 
+        source_labels: torch.tensor,
         look_up_source,
         base_ids: torch.tensor,
+        base_labels: torch.tensor,
         look_up_base
     ):
         """
@@ -205,11 +207,16 @@ class Trainer:
         with torch.no_grad():
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
-                input_ids=input_ids, # source input
-                labels=labels,
+                input_ids=source_ids, # source input
+                labels=source_labels,
                 look_up = look_up_source
             )
-
+            # teacher forward pass normal
+            dual_teacher_outputs = self.teacher(
+                input_ids=base_ids, # base input
+                labels=base_labels,
+                look_up=look_up_base
+            )
             # teacher forward pass for interchange variables.
             dual_counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
@@ -220,45 +227,88 @@ class Trainer:
 
             # teacher forward pass for interchanged outputs.
             counterfactual_outputs_teacher = self.teacher(
-                input_ids=input_ids, # source inputs 
-                labels=labels,
+                input_ids=source_ids, # source inputs 
+                labels=source_labels,
                 look_up = look_up_source,
                 interchanged_variables=dual_counterfactual_activations_teacher, # base activations
+                variable_names=teacher_interchanged_variables_mapping
+            )
+            #
+            counterfactual_activations_teacher = get_activation_at(
+                self.teacher,
+                input_ids=source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
+                variable_names=teacher_variable_names,
+                look_up = look_up_source
+            )
+            #
+            dual_counterfactual_outputs_teacher = self.teacher(
+                input_ids=base_ids, # base inputs 
+                labels=base_labels,
+                look_up = look_up_base,
+                interchanged_variables=counterfactual_activations_teacher, # source activations
                 variable_names=teacher_interchanged_variables_mapping
             )
 
         t_logits, _ = \
             teacher_outputs["logits"], teacher_outputs["hidden_states"]
-        
+        dual_t_logits, _ = \
+            dual_teacher_outputs["logits"], dual_teacher_outputs["hidden_states"]
         # student forward pass normal.
         student_outputs = self.student(
-            input_ids=input_ids, # source input
+            input_ids=source_ids, # source input
             t_logits=t_logits
         )
-        s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
+        # student forward pass normal.
+        dual_student_outputs = self.student(
+            input_ids=base_ids, # base input
+            t_logits=dual_t_logits
+        )
+        # s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
+        # dual_s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
         causal_t_logits, _ = \
             counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-
+        dual_causal_t_logits, _ = \
+            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+        
+        self.last_loss += student_outputs["loss"].item()
+        self.last_loss += dual_student_outputs["loss"].item()
+        
         # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
             self.student,
             base_ids, # this is different! OBTAIN BASE ACTIVATIONS
             variable_names=student_variable_names
         )
+        # counterfactual_activations_student = get_activation_at(
+        #     self.student,
+        #     source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
+        #     variable_names=student_variable_names
+        # )
 
         # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
-            input_ids=input_ids, # source input
+            input_ids=source_ids, # source input
             # intervention
             interchanged_variables=dual_counterfactual_activations_student, # base activations
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
             t_logits=t_logits,
             causal_t_logits=causal_t_logits,
-            s_logits=s_logits
+            # s_logits=s_logits
         )
+        dual_counterfactual_outputs_student = self.student(
+            input_ids=base_ids, # base input
+            # intervention
+            interchanged_variables=dual_counterfactual_activations_student, # source activations
+            variable_names=student_interchanged_variables_mapping,
+            # backward loss.
+            t_logits=dual_t_logits,
+            causal_t_logits=dual_causal_t_logits,
+            # s_logits=dual_s_logits
+        )
+        self.last_loss += counterfactual_outputs_student["loss"].item()
+        self.last_loss += dual_counterfactual_outputs_student["loss"].item()
 
-        self.last_loss = counterfactual_outputs_student["loss"].item()
         self.total_loss_epoch += self.last_loss
         self.optimize(counterfactual_outputs_student["loss"])
 
