@@ -308,7 +308,6 @@ class Trainer:
         )
         loss += counterfactual_outputs_student["loss"]
         loss += dual_counterfactual_outputs_student["loss"]
-
         self.last_loss = loss.item()
         self.total_loss_epoch += self.last_loss
         self.optimize(loss)
