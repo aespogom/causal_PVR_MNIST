@@ -203,7 +203,7 @@ class Trainer:
                 student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
-        
+        loss = 0
         with torch.no_grad():
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
@@ -270,8 +270,8 @@ class Trainer:
         dual_causal_t_logits, _ = \
             counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
         
-        self.last_loss += student_outputs["loss"].item()
-        self.last_loss += dual_student_outputs["loss"].item()
+        loss += student_outputs["loss"]
+        loss += dual_student_outputs["loss"]
         
         # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
@@ -306,11 +306,12 @@ class Trainer:
             causal_t_logits=dual_causal_t_logits,
             # s_logits=dual_s_logits
         )
-        self.last_loss += counterfactual_outputs_student["loss"].item()
-        self.last_loss += dual_counterfactual_outputs_student["loss"].item()
+        loss += counterfactual_outputs_student["loss"]
+        loss += dual_counterfactual_outputs_student["loss"]
 
+        self.last_loss = loss.item()
         self.total_loss_epoch += self.last_loss
-        self.optimize(counterfactual_outputs_student["loss"])
+        self.optimize(loss)
 
         self.last_ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
                                             student_variable_names, student_interchanged_variables_mapping)
@@ -336,6 +337,7 @@ class Trainer:
         loss.backward()
         self.n_iter += 1
         self.n_total_iter += 1
+        self.last_log = time.time()
         if self.n_iter % self.params.gradient_accumulation_steps == 0:
             nn.utils.clip_grad_norm_(self.student.parameters(), 5.0)
             self.optimizer.step()
