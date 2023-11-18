@@ -48,6 +48,10 @@ class Trainer:
         self.last_ii_acc = 0
         self.total_beh_acc_epoch = 0
         self.last_beh_acc = 0
+
+        
+        self.last_teacher_interchange_efficacy = 0
+        self.last_student_interchange_efficacy = 0
         
         # Deserialize causal neuron mappings
         # $L:X$H:Y$[Z:Z+1]
@@ -155,7 +159,9 @@ class Trainer:
                         "Last_ii_acc": f'{self.last_ii_acc:.2f}',
                         "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
                         "Last_beh_acc": f'{self.last_beh_acc:.2f}',
-                        "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}"
+                        "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
+                        "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
+                        "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
                     }
                 )
             iter_bar.close()
@@ -203,7 +209,9 @@ class Trainer:
                 student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
+        
         loss = 0
+
         with torch.no_grad():
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
@@ -253,6 +261,10 @@ class Trainer:
             teacher_outputs["logits"], teacher_outputs["hidden_states"]
         dual_t_logits, _ = \
             dual_teacher_outputs["logits"], dual_teacher_outputs["hidden_states"]
+        causal_t_logits, _ = \
+            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+        dual_causal_t_logits, _ = \
+            dual_counterfactual_outputs_teacher["logits"], dual_counterfactual_outputs_teacher["hidden_states"]
         # student forward pass normal.
         student_outputs = self.student(
             input_ids=source_ids, # source input
@@ -262,14 +274,7 @@ class Trainer:
         dual_student_outputs = self.student(
             input_ids=base_ids, # base input
             t_logits=dual_t_logits
-        )
-        # s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
-        # dual_s_logits, _ = student_outputs["logits"], student_outputs["hidden_states"]
-        causal_t_logits, _ = \
-            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        dual_causal_t_logits, _ = \
-            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        
+        )        
         loss += student_outputs["loss"]
         loss += dual_student_outputs["loss"]
         
@@ -279,11 +284,15 @@ class Trainer:
             base_ids, # this is different! OBTAIN BASE ACTIVATIONS
             variable_names=student_variable_names
         )
-        # counterfactual_activations_student = get_activation_at(
-        #     self.student,
-        #     source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
-        #     variable_names=student_variable_names
-        # )
+        counterfactual_activations_student = get_activation_at(
+            self.student,
+            source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
+            variable_names=student_variable_names
+        )
+        s_logits, _ = \
+            student_outputs["logits"], student_outputs["hidden_states"]
+        dual_s_logits, _ = \
+            dual_student_outputs["logits"], dual_student_outputs["hidden_states"]
 
         # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
@@ -294,18 +303,22 @@ class Trainer:
             # backward loss.
             t_logits=t_logits,
             causal_t_logits=causal_t_logits,
-            # s_logits=s_logits
+            s_logits=s_logits
         )
+        self.last_student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].item()
+        self.last_teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].item()
         dual_counterfactual_outputs_student = self.student(
             input_ids=base_ids, # base input
             # intervention
-            interchanged_variables=dual_counterfactual_activations_student, # source activations
+            interchanged_variables=counterfactual_activations_student, # source activations
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
             t_logits=dual_t_logits,
             causal_t_logits=dual_causal_t_logits,
-            # s_logits=dual_s_logits
+            s_logits=dual_s_logits
         )
+        self.last_student_interchange_efficacy += dual_counterfactual_outputs_student["student_interchange_efficacy"].item()
+        self.last_teacher_interchange_efficacy += dual_counterfactual_outputs_student["teacher_interchange_efficacy"].item()
         loss += counterfactual_outputs_student["loss"]
         loss += dual_counterfactual_outputs_student["loss"]
         self.last_loss = loss.item()
@@ -452,7 +465,7 @@ class Trainer:
         """
         Save the current state. Only by the master process.
         """
-        mdl_to_save = self.student.model[0] if hasattr(self.student.model[0], "modules") else self.student
+        mdl_to_save = self.student.model if hasattr(self.student.model, "modules") else self.student
         state_dict = mdl_to_save.state_dict()
         torch.save(state_dict, os.path.join(self.dump_path, checkpoint_name))
 

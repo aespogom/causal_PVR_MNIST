@@ -24,9 +24,9 @@ class ResNet18(nn.Module):
         # modify last layer to match output classes
         num_features = resnet18.fc.in_features
         resnet18.fc = nn.Linear(num_features, 10)
-
-        self.model = nn.ModuleList([resnet18])
+        self.model = resnet18
         self.loss = nn.CrossEntropyLoss()
+        self.ce_loss_fct = nn.KLDivLoss(reduction="batchmean")
 
     def forward(self,
                 input_ids,
@@ -36,13 +36,14 @@ class ResNet18(nn.Module):
                 interchanged_activations=None,
                 # # losses
                 t_logits=None,
-                causal_t_logits=None
+                causal_t_logits=None,
+                s_logits=None
                 ):
         student_output = {}
         student_output["hidden_states"]=[]
         # Interchange intervention
         x = input_ids.unsqueeze(0)
-        layers = [self.model[0].conv1, self.model[0].maxpool, self.model[0].layer1, self.model[0].layer2, self.model[0].layer3, self.model[0].layer4]
+        layers = [self.model.conv1, self.model.maxpool, self.model.layer1, self.model.layer2, self.model.layer3, self.model.layer4]
         hooks = []
         for i, layer_module in enumerate(layers):
             if variable_names != None and i in variable_names:
@@ -57,9 +58,9 @@ class ResNet18(nn.Module):
             )
             student_output["hidden_states"].append(x)
         
-        x = self.model[0].avgpool(x)
+        x = self.model.avgpool(x)
         x = torch.flatten(x, 1)
-        student_output["logits"] = self.model[0].fc(x)
+        student_output["logits"] = self.model.fc(x)
 
         ## Origin code uses softmax before loss because they use KL divergence loss
         ## But this is not the case for crossentropy
@@ -90,6 +91,22 @@ class ResNet18(nn.Module):
             loss = self.loss(causal_s_logits, causal_t_logits)
             student_output["loss"] = loss
 
+            # measure the efficacy of the interchange.
+            teacher_interchange_efficacy = (
+                self.ce_loss_fct(
+                    nn.functional.log_softmax(causal_t_logits, dim=-1),
+                    nn.functional.softmax(t_logits, dim=-1),
+                )
+            )
+
+            student_interchange_efficacy = (
+                self.ce_loss_fct(
+                    nn.functional.log_softmax(causal_s_logits, dim=-1),
+                    nn.functional.softmax(s_logits, dim=-1),
+                )
+            )
+            student_output["teacher_interchange_efficacy"] = teacher_interchange_efficacy
+            student_output["student_interchange_efficacy"] = student_interchange_efficacy
         
         for h in hooks:
             h.remove()
