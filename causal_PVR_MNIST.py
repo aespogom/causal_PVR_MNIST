@@ -49,6 +49,9 @@ class Trainer:
         self.total_beh_acc_epoch = 0
         self.last_beh_acc = 0
 
+        self.alpha_ce = 0.25
+        self.alpha_causal = 0.75
+
         
         self.last_teacher_interchange_efficacy = 0
         self.last_student_interchange_efficacy = 0
@@ -211,6 +214,7 @@ class Trainer:
                 student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
         
         loss = 0
+        dual_loss = 0
 
         with torch.no_grad():
             # teacher forward pass normal.
@@ -275,8 +279,8 @@ class Trainer:
             input_ids=base_ids, # base input
             t_logits=dual_t_logits
         )        
-        loss += student_outputs["loss"]
-        loss += dual_student_outputs["loss"]
+        loss += self.alpha_ce * student_outputs["loss"]
+        dual_loss += self.alpha_ce * dual_student_outputs["loss"]
         
         # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
@@ -319,11 +323,14 @@ class Trainer:
         )
         self.last_student_interchange_efficacy += dual_counterfactual_outputs_student["student_interchange_efficacy"].item()
         self.last_teacher_interchange_efficacy += dual_counterfactual_outputs_student["teacher_interchange_efficacy"].item()
-        loss += counterfactual_outputs_student["loss"]
-        loss += dual_counterfactual_outputs_student["loss"]
-        self.last_loss = loss.item()
+        loss += self.alpha_causal * counterfactual_outputs_student["loss"]
+        dual_loss += self.alpha_causal * dual_counterfactual_outputs_student["loss"]
+        self.last_loss = loss.item() + dual_loss.item()
         self.total_loss_epoch += self.last_loss
-        self.optimize(loss)
+        self.optimize(loss,dual_loss)
+        # check double optimize
+        # plot losses: if loss IIT is lower than regular, then II is not learning
+        ## in that case increase importance loss IIT (temperature??)
 
         self.last_ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
                                             student_variable_names, student_interchanged_variables_mapping)
@@ -332,7 +339,7 @@ class Trainer:
         self.total_beh_acc_epoch += self.last_beh_acc
 
 
-    def optimize(self, loss):
+    def optimize(self, loss, dual_loss):
         """
         Normalization on the loss (gradient accumulation or distributed training), followed by
         backward pass on the loss, possibly followed by a parameter update (depending on the gradient accumulation).
@@ -346,7 +353,8 @@ class Trainer:
         if self.params.gradient_accumulation_steps > 1:
             loss = loss / self.params.gradient_accumulation_steps
 
-        loss.backward()
+        loss.backward(retain_graph=True)
+        dual_loss.backward()
         self.n_iter += 1
         self.n_total_iter += 1
         self.last_log = time.time()
