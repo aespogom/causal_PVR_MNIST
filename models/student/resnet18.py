@@ -35,9 +35,9 @@ class ResNet18(nn.Module):
                 variable_names=None,
                 interchanged_activations=None,
                 # # losses
-                t_logits=None,
-                causal_t_logits=None,
-                s_logits=None
+                t_outputs=None,
+                causal_t_outputs=None,
+                s_outputs=None
                 ):
         student_output = {}
         student_output["hidden_states"]=[]
@@ -60,17 +60,17 @@ class ResNet18(nn.Module):
         
         x = self.model.avgpool(x)
         x = torch.flatten(x, 1)
-        student_output["logits"] = self.model.fc(x)
+        student_output["outputs"] = self.model.fc(x)
 
         ## Origin code uses softmax before loss because they use KL divergence loss
         ## But this is not the case for crossentropy
-        # student_output["logits"] = nn.Softmax(dim=1)(self.model[0].fc(x))
+        # student_output["outputs"] = nn.Softmax(dim=1)(self.model[0].fc(x))
         
         # This part is only teacher
         # # if labels is not None:
         # #     tensor_labels = torch.zeros((1,10))
         # #     tensor_labels[0,labels.item()]=1
-        # #     student_output["loss"]  = self.loss(student_output["logits"] , tensor_labels)
+        # #     student_output["loss"]  = self.loss(student_output["outputs"] , tensor_labels)
         
         # IIT Objective
         # For each intermediate variable Yw ∈ {YTL, YTR, YBL, YBR}, we introduce an IIT
@@ -78,31 +78,31 @@ class ResNet18(nn.Module):
         #    submodel of C where the three intermediate variables
         #    that aren’t Yw are marginalized out:
         #     sum[ CE(Cw intinv, N intinv)]
-        if causal_t_logits is None:
+        if causal_t_outputs is None:
             # if it is None, it is simply a forward for getting hidden states!
-            if t_logits is not None:
-                s_logits, _ = student_output["logits"], student_output["hidden_states"]
-                loss = self.loss(s_logits, t_logits)
+            if t_outputs is not None:
+                s_outputs, _ = student_output["outputs"], student_output["hidden_states"]
+                loss = self.loss(s_outputs, t_outputs)
                 student_output["loss"] = loss
         else:
             # causal loss.
-            causal_s_logits, _ = \
-                student_output["logits"], student_output["hidden_states"]
-            loss = self.loss(causal_s_logits, causal_t_logits)
+            causal_s_outputs, _ = \
+                student_output["outputs"], student_output["hidden_states"]
+            loss = self.loss(causal_s_outputs, causal_t_outputs)
             student_output["loss"] = loss
 
             # measure the efficacy of the interchange.
             teacher_interchange_efficacy = (
                 self.ce_loss_fct(
-                    nn.functional.log_softmax(causal_t_logits, dim=-1),
-                    nn.functional.softmax(t_logits, dim=-1),
+                    nn.functional.log_softmax(causal_t_outputs, dim=-1),
+                    nn.functional.softmax(t_outputs, dim=-1),
                 )
             )
 
             student_interchange_efficacy = (
                 self.ce_loss_fct(
-                    nn.functional.log_softmax(causal_s_logits, dim=-1),
-                    nn.functional.softmax(s_logits, dim=-1),
+                    nn.functional.log_softmax(causal_s_outputs, dim=-1),
+                    nn.functional.softmax(s_outputs, dim=-1),
                 )
             )
             student_output["teacher_interchange_efficacy"] = teacher_interchange_efficacy

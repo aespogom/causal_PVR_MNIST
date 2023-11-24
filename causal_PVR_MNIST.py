@@ -11,6 +11,7 @@ import os
 import time
 import shutil
 import numpy as np
+from pickle import dump
 
 from tqdm import tqdm
 from counterfactual_utils import deserialize_variable_name, parse_variable_name, get_activation_at
@@ -55,6 +56,9 @@ class Trainer:
         
         self.last_teacher_interchange_efficacy = 0
         self.last_student_interchange_efficacy = 0
+
+        self.track_II_loss = []
+        self.track_loss = []
         
         # Deserialize causal neuron mappings
         # $L:X$H:Y$[Z:Z+1]
@@ -111,10 +115,12 @@ class Trainer:
         )
         logger.info("------ Number of parameters (student): %i" % sum([p.numel() for p in self.student.parameters()]))
         self.optimizer = AdamW(
-            optimizer_grouped_parameters, lr=0.1, eps=1e-06, betas=(0.9, 0.98)
+            optimizer_grouped_parameters, lr=0.01, eps=1e-06, betas=(0.9, 0.98)
         )
 
         warmup_steps = math.ceil(num_train_optimization_steps * 0.05)
+        logger.info("------ Warm steps ----- %i" % warmup_steps)
+        logger.info("------ num_train_optimization_steps  ----- %i" % num_train_optimization_steps)
         self.scheduler = get_linear_schedule_with_warmup(
             self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_train_optimization_steps
         )
@@ -174,6 +180,15 @@ class Trainer:
 
         logger.info("Save very last checkpoint as `pytorch_model.pth`.")
         self.save_checkpoint(checkpoint_name="pytorch_model.pth")
+
+        # Save the training loss values
+        with open(os.path.join(self.dump_path,'train_loss.pkl'), 'wb') as file:
+            dump(self.track_loss, file)
+        
+        # Save the II loss values
+        with open(os.path.join(self.dump_path,'ii_loss.pkl'), 'wb') as file:
+            dump(self.track_II_loss, file)
+
         logger.info("Training is finished")
 
     def step(
@@ -261,27 +276,30 @@ class Trainer:
                 variable_names=teacher_interchanged_variables_mapping
             )
 
-        t_logits, _ = \
-            teacher_outputs["logits"], teacher_outputs["hidden_states"]
-        dual_t_logits, _ = \
-            dual_teacher_outputs["logits"], dual_teacher_outputs["hidden_states"]
-        causal_t_logits, _ = \
-            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        dual_causal_t_logits, _ = \
-            dual_counterfactual_outputs_teacher["logits"], dual_counterfactual_outputs_teacher["hidden_states"]
+        t_outputs, _ = \
+            teacher_outputs["outputs"], teacher_outputs["hidden_states"]
+        dual_t_outputs, _ = \
+            dual_teacher_outputs["outputs"], dual_teacher_outputs["hidden_states"]
+        causal_t_outputs, _ = \
+            counterfactual_outputs_teacher["outputs"], counterfactual_outputs_teacher["hidden_states"]
+        dual_causal_t_outputs, _ = \
+            dual_counterfactual_outputs_teacher["outputs"], dual_counterfactual_outputs_teacher["hidden_states"]
         # student forward pass normal.
         student_outputs = self.student(
             input_ids=source_ids, # source input
-            t_logits=t_logits
+            t_outputs=t_outputs
         )
         # student forward pass normal.
         dual_student_outputs = self.student(
             input_ids=base_ids, # base input
-            t_logits=dual_t_logits
-        )        
+            t_outputs=dual_t_outputs
+        )
+
+
         loss += self.alpha_ce * student_outputs["loss"]
         dual_loss += self.alpha_ce * dual_student_outputs["loss"]
-        
+
+        self.track_loss.append(student_outputs["loss"].item()+dual_student_outputs["loss"].item())
         # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
             self.student,
@@ -293,10 +311,10 @@ class Trainer:
             source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
             variable_names=student_variable_names
         )
-        s_logits, _ = \
-            student_outputs["logits"], student_outputs["hidden_states"]
-        dual_s_logits, _ = \
-            dual_student_outputs["logits"], dual_student_outputs["hidden_states"]
+        s_outputs, _ = \
+            student_outputs["outputs"], student_outputs["hidden_states"]
+        dual_s_outputs, _ = \
+            dual_student_outputs["outputs"], dual_student_outputs["hidden_states"]
 
         # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
@@ -305,9 +323,9 @@ class Trainer:
             interchanged_variables=dual_counterfactual_activations_student, # base activations
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
-            t_logits=t_logits,
-            causal_t_logits=causal_t_logits,
-            s_logits=s_logits
+            t_outputs=t_outputs,
+            causal_t_outputs=causal_t_outputs,
+            s_outputs=s_outputs
         )
         self.last_student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].item()
         self.last_teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].item()
@@ -317,14 +335,17 @@ class Trainer:
             interchanged_variables=counterfactual_activations_student, # source activations
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
-            t_logits=dual_t_logits,
-            causal_t_logits=dual_causal_t_logits,
-            s_logits=dual_s_logits
+            t_outputs=dual_t_outputs,
+            causal_t_outputs=dual_causal_t_outputs,
+            s_outputs=dual_s_outputs
         )
         self.last_student_interchange_efficacy += dual_counterfactual_outputs_student["student_interchange_efficacy"].item()
         self.last_teacher_interchange_efficacy += dual_counterfactual_outputs_student["teacher_interchange_efficacy"].item()
+        
         loss += self.alpha_causal * counterfactual_outputs_student["loss"]
         dual_loss += self.alpha_causal * dual_counterfactual_outputs_student["loss"]
+        
+        self.track_II_loss.append(counterfactual_outputs_student["loss"].item()+dual_counterfactual_outputs_student["loss"].item() )
         self.last_loss = loss.item() + dual_loss.item()
         self.total_loss_epoch += self.last_loss
         self.optimize(loss,dual_loss)
@@ -393,7 +414,7 @@ class Trainer:
                     interchanged_variables=dual_counterfactual_activations_teacher, # base activations
                     variable_names=teacher_interchanged_variables_mapping
                 )
-                labels.append(int(outputs_teacher["logits"].argmax(dim=1)))
+                labels.append(int(outputs_teacher["outputs"].argmax(dim=1)))
 
                 # Run the neural model with the intervention:
                 dual_counterfactual_activations_student = get_activation_at(
@@ -408,7 +429,7 @@ class Trainer:
                     variable_names=student_interchanged_variables_mapping
                 )
                 # Get the neural model's prediction with the intervention:
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
+                pred = nn.Softmax(dim=1)(outputs_student['outputs']).argmax(dim=1)
                 predictions.append(int(pred))
             return np.sum(np.equal(predictions,labels))/len(labels)
     
@@ -429,13 +450,13 @@ class Trainer:
                     input_ids=source, # source input
                     look_up=look_up_source
                 )
-                labels.append(int(outputs_teacher["logits"].argmax(dim=1)))
+                labels.append(int(outputs_teacher["outputs"].argmax(dim=1)))
                 # Run the neural model:
                 outputs_student = self.student(
                     input_ids=source # source input
                 )
                 # Get the neural model's prediction
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
+                pred = nn.Softmax(dim=1)(outputs_student['outputs']).argmax(dim=1)
                 predictions.append(int(pred))
 
                 # Run the causal model:
@@ -443,13 +464,13 @@ class Trainer:
                     input_ids=base, # base input
                     look_up=look_up_base
                 )
-                labels.append(int(outputs_teacher["logits"].argmax(dim=1)))
+                labels.append(int(outputs_teacher["outputs"].argmax(dim=1)))
                 # Run the neural model:
                 outputs_student = self.student(
                     input_ids=base # base input
                 )
                 # Get the neural model's prediction
-                pred = nn.Softmax(dim=1)(outputs_student['logits']).argmax(dim=1)
+                pred = nn.Softmax(dim=1)(outputs_student['outputs']).argmax(dim=1)
                 predictions.append(int(pred))
 
             return np.sum(np.equal(predictions,labels))/len(labels)
@@ -480,6 +501,7 @@ class Trainer:
 def prepare_trainer(args):
 
     # ARGS #
+    args.seed=56
     set_seed(args)
     
     shutil.rmtree(args.dump_path)
@@ -537,8 +559,7 @@ if __name__ == "__main__":
         default="training_configs/MNIST.nm",
         help="Predefined neuron mapping for the interchange experiment.",
     )
-    parser.add_argument("--n_epoch", type=int, default=10, help="Number of pass on the whole dataset.")
-    parser.add_argument("--batch_size", type=int, default=1024, help="Batch size (for each process).")
+    parser.add_argument("--n_epoch", type=int, default=5, help="Number of pass on the whole dataset.")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -547,7 +568,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--n_gpu", type=int, default=1, help="Number of GPUs in the node.")
     parser.add_argument("--local_rank", type=int, default=0, help="Distributed training - Local rank")
-    parser.add_argument("--seed", type=int, default=56, help="Random seed")
 
     parser.add_argument("--log_interval", type=int, default=500, help="Tensorboard logging interval.")
     parser.add_argument("--checkpoint_interval", type=int, default=4000, help="Checkpoint interval.")
@@ -555,7 +575,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # config the runname here and overwrite.
-    run_name = f"s_resnet18_t_oracle_data_MNIST_seed_{args.seed}"
+    run_name = f"s_resnet18_t_oracle_data_MNIST_seed_56"
     args.run_name = run_name
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     trainer = prepare_trainer(args)

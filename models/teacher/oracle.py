@@ -74,7 +74,7 @@ class Oracle(nn.Module):
         ])
         tensor_preds = torch.zeros((1,10))
         tensor_preds[0,FO.item()]=1
-        teacher_ouputs["logits"]=tensor_preds
+        teacher_ouputs["outputs"]=tensor_preds
 
         for h in hooks:
             h.remove()

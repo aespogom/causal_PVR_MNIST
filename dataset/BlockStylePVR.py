@@ -25,7 +25,7 @@ TRANSFORM = transforms.Compose([
 class BlockStylePVR(Dataset):
     def __init__(self,
                  train: bool,
-                 mode: str = "iid",
+                 mode: str = "holdout",
                  size: int = None):
         """
         The train/test split designed by Zhang et al. (2021) creates a distributional shift between
@@ -114,19 +114,19 @@ class BlockStylePVR(Dataset):
 def setup_loaders():
     AVAIL_GPUS = min(1, torch.cuda.device_count())
     AVAIL_CPUS = multiprocessing.cpu_count()
-    torch.manual_seed(42)
+    torch.manual_seed(56)
 
     num_workers = (4 * AVAIL_GPUS) if (AVAIL_GPUS > 0) else AVAIL_CPUS
 
     shuffle = False
     # Aumentar size para dataset completo
-    train_ds = BlockStylePVR(train=True, size=50)
+    train_ds = BlockStylePVR(train=True, size=10)
     train_loader = DataLoader(train_ds, batch_size=2,
                               pin_memory=True,
                               num_workers=num_workers,
                               shuffle=shuffle)
 
-    val_ds = BlockStylePVR(train=False, size=50)
+    val_ds = BlockStylePVR(train=False, size=10)
     val_loader = DataLoader(val_ds, batch_size=2,
                             pin_memory=True,
                             num_workers=num_workers)
