@@ -88,4 +88,5 @@ def interchange_hook(interchanged_variable, interchanged_activations):
                 output[...,10:,10:] = interchanged_activations
         else:
             output = interchanged_activations
+        return output
     return hook

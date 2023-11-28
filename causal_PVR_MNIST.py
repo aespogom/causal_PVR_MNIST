@@ -21,6 +21,23 @@ from models.teacher import oracle as teacher
 from utils import logger, set_seed
 from transformers import get_linear_schedule_with_warmup
 
+## EARLY STOPPER
+class EarlyStopper:
+    def __init__(self, patience=5, min_delta=0.001):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+
+    def early_stop(self, validation_loss):
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        elif validation_loss > (self.min_validation_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
 
 ## TRAINER
 class Trainer:
@@ -45,17 +62,18 @@ class Trainer:
         self.n_total_iter = 0
         self.total_loss_epoch = 0
         self.last_loss = 0
-        self.total_ii_acc_epoch = 0
-        self.last_ii_acc = 0
-        self.total_beh_acc_epoch = 0
-        self.last_beh_acc = 0
+        self.last_loss_ce = 0
+        self.last_loss_causal_ce = 0
+        self.last_teacher_interchange_efficacy = 0
+        self.last_student_interchange_efficacy = 0
+
+        # self.total_ii_acc_epoch = 0
+        # self.last_ii_acc = 0
+        # self.total_beh_acc_epoch = 0
+        # self.last_beh_acc = 0
 
         self.alpha_ce = 0.25
         self.alpha_causal = 0.75
-
-        
-        self.last_teacher_interchange_efficacy = 0
-        self.last_student_interchange_efficacy = 0
 
         self.track_II_loss = []
         self.track_loss = []
@@ -124,6 +142,7 @@ class Trainer:
         self.scheduler = get_linear_schedule_with_warmup(
             self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_train_optimization_steps
         )
+        self.early_stopper = EarlyStopper(patience=3, min_delta=10)
 
     def train(self):
         """
@@ -132,12 +151,12 @@ class Trainer:
         logger.info("Starting training")
         self.last_log = time.time()
         self.teacher.eval()
+        self.student.train()
 
         for _ in range(self.params.n_epoch):
             logger.info(f"--- Starting epoch {self.epoch}/{self.params.n_epoch-1}")
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
-                self.student.train()
                 x, value, batch_labels = batch
                 source = x[0,:]
                 source_labels = value[0]
@@ -165,21 +184,21 @@ class Trainer:
                     {
                         "Last_loss": f"{self.last_loss:.2f}", 
                         "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
-                        "Last_ii_acc": f'{self.last_ii_acc:.2f}',
-                        "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
-                        "Last_beh_acc": f'{self.last_beh_acc:.2f}',
-                        "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
+                        # "Last_ii_acc": f'{self.last_ii_acc:.2f}',
+                        # "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
+                        # "Last_beh_acc": f'{self.last_beh_acc:.2f}',
+                        # "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
                         "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
                         "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
                     }
                 )
+
             iter_bar.close()
-
             logger.info(f"--- Ending epoch {self.epoch}/{self.params.n_epoch-1}")
+            if self.early_stopper.early_stop(self.total_loss_epoch/self.n_iter):
+                self.end_epoch()          
+                break
             self.end_epoch()
-
-        logger.info("Save very last checkpoint as `pytorch_model.pth`.")
-        self.save_checkpoint(checkpoint_name="pytorch_model.pth")
 
         # Save the training loss values
         with open(os.path.join(self.dump_path,'train_loss.pkl'), 'wb') as file:
@@ -228,9 +247,6 @@ class Trainer:
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
         
-        loss = 0
-        dual_loss = 0
-
         with torch.no_grad():
             # teacher forward pass normal.
             teacher_outputs = self.teacher(
@@ -276,30 +292,36 @@ class Trainer:
                 variable_names=teacher_interchanged_variables_mapping
             )
 
-        t_outputs, _ = \
-            teacher_outputs["outputs"], teacher_outputs["hidden_states"]
-        dual_t_outputs, _ = \
-            dual_teacher_outputs["outputs"], dual_teacher_outputs["hidden_states"]
-        causal_t_outputs, _ = \
-            counterfactual_outputs_teacher["outputs"], counterfactual_outputs_teacher["hidden_states"]
-        dual_causal_t_outputs, _ = \
-            dual_counterfactual_outputs_teacher["outputs"], dual_counterfactual_outputs_teacher["hidden_states"]
+        t_outputs = teacher_outputs["outputs"]
+        dual_t_outputs = dual_teacher_outputs["outputs"]
         # student forward pass normal.
         student_outputs = self.student(
             input_ids=source_ids, # source input
-            t_outputs=t_outputs
+            t_outputs=t_outputs,
+            #lm_labels
+            #t_hidden
         )
         # student forward pass normal.
         dual_student_outputs = self.student(
             input_ids=base_ids, # base input
             t_outputs=dual_t_outputs
+            #lm_labels
+            #dual_t_hidden
         )
 
+        s_outputs = student_outputs["outputs"]
+        dual_s_outputs = dual_student_outputs["outputs"]
+        causal_t_outputs = counterfactual_outputs_teacher["outputs"]
+        ## HERE ANA IS THIS A BUG IN ORIGINAL CODE??? they are using counterfactual_outputs_teacher instead of dual_counterfactual_outputs_teacher
+        dual_causal_t_outputs = counterfactual_outputs_teacher["outputs"]
+        
+        # Loss_ce
+        loss_ce = student_outputs["loss"]
+        loss_ce += dual_student_outputs["loss"]
+        loss = self.alpha_ce * loss_ce
 
-        loss += self.alpha_ce * student_outputs["loss"]
-        dual_loss += self.alpha_ce * dual_student_outputs["loss"]
+        self.track_loss.append(loss.item())
 
-        self.track_loss.append(student_outputs["loss"].item()+dual_student_outputs["loss"].item())
         # student forward pass for interchange variables.
         dual_counterfactual_activations_student = get_activation_at(
             self.student,
@@ -311,10 +333,6 @@ class Trainer:
             source_ids, # this is different! OBTAIN SOURCE ACTIVATIONS
             variable_names=student_variable_names
         )
-        s_outputs, _ = \
-            student_outputs["outputs"], student_outputs["hidden_states"]
-        dual_s_outputs, _ = \
-            dual_student_outputs["outputs"], dual_student_outputs["hidden_states"]
 
         # student forward pass for interchanged outputs.
         counterfactual_outputs_student = self.student(
@@ -324,11 +342,12 @@ class Trainer:
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
             t_outputs=t_outputs,
+            #t_hidden
             causal_t_outputs=causal_t_outputs,
+            #causal_t_hidden
             s_outputs=s_outputs
+            #s_hidden
         )
-        self.last_student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].item()
-        self.last_teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].item()
         dual_counterfactual_outputs_student = self.student(
             input_ids=base_ids, # base input
             # intervention
@@ -336,31 +355,42 @@ class Trainer:
             variable_names=student_interchanged_variables_mapping,
             # backward loss.
             t_outputs=dual_t_outputs,
+            #dual_t_hidden
             causal_t_outputs=dual_causal_t_outputs,
+            #dual_causal_t_hidden
             s_outputs=dual_s_outputs
+            #dual_causal_s_hidden
         )
+        causal_loss_ce = counterfactual_outputs_student["loss"]
+        causal_loss_ce += dual_counterfactual_outputs_student["loss"]
+
+        self.last_student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].item()
+        self.last_teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].item()
+        
         self.last_student_interchange_efficacy += dual_counterfactual_outputs_student["student_interchange_efficacy"].item()
         self.last_teacher_interchange_efficacy += dual_counterfactual_outputs_student["teacher_interchange_efficacy"].item()
         
-        loss += self.alpha_causal * counterfactual_outputs_student["loss"]
-        dual_loss += self.alpha_causal * dual_counterfactual_outputs_student["loss"]
-        
+        loss += self.alpha_causal * causal_loss_ce
+            
         self.track_II_loss.append(counterfactual_outputs_student["loss"].item()+dual_counterfactual_outputs_student["loss"].item() )
-        self.last_loss = loss.item() + dual_loss.item()
-        self.total_loss_epoch += self.last_loss
-        self.optimize(loss,dual_loss)
+        
+        self.total_loss_epoch += loss.item()
+        self.last_loss = loss.item()# optional recording of the value.
+        self.last_loss_causal_ce = causal_loss_ce.item()
+        
+        self.optimize(loss)
         # check double optimize
         # plot losses: if loss IIT is lower than regular, then II is not learning
         ## in that case increase importance loss IIT (temperature??)
 
-        self.last_ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
-                                            student_variable_names, student_interchanged_variables_mapping)
-        self.last_beh_acc = self.beh_accuracy()
-        self.total_ii_acc_epoch += self.last_ii_acc
-        self.total_beh_acc_epoch += self.last_beh_acc
+        # self.last_ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
+        #                                     student_variable_names, student_interchanged_variables_mapping)
+        # self.last_beh_acc = self.beh_accuracy()
+        # self.total_ii_acc_epoch += self.last_ii_acc
+        # self.total_beh_acc_epoch += self.last_beh_acc
 
 
-    def optimize(self, loss, dual_loss):
+    def optimize(self, loss):
         """
         Normalization on the loss (gradient accumulation or distributed training), followed by
         backward pass on the loss, possibly followed by a parameter update (depending on the gradient accumulation).
@@ -374,16 +404,77 @@ class Trainer:
         if self.params.gradient_accumulation_steps > 1:
             loss = loss / self.params.gradient_accumulation_steps
 
-        loss.backward(retain_graph=True)
-        dual_loss.backward()
+        loss.backward()
+
+        #iter()
         self.n_iter += 1
         self.n_total_iter += 1
         self.last_log = time.time()
+
         if self.n_iter % self.params.gradient_accumulation_steps == 0:
             nn.utils.clip_grad_norm_(self.student.parameters(), 5.0)
             self.optimizer.step()
             self.optimizer.zero_grad()
             self.scheduler.step()
+    
+    def end_epoch(self):
+        """
+        Finally arrived at the end of epoch (full pass on dataset).
+        Do some tensorboard logging and checkpoint saving.
+        """
+        #f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}_ii_acc_{self.total_ii_acc_epoch/self.n_iter:.2f}_beh_acc_{self.total_beh_acc_epoch/self.n_iter:.2f}
+        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}.pth")
+
+        self.epoch += 1
+        self.n_iter = 0
+        self.total_loss_epoch = 0
+        self.total_ii_acc_epoch = 0
+        self.total_beh_acc_epoch = 0
+
+    def save_checkpoint(self, checkpoint_name: str = "checkpoint.pth"):
+        """
+        Save the current state. Only by the master process.
+        """
+        current_checkpoints = os.listdir(self.dump_path)
+        current_loss_checkpoint = [int(loss.split('_')[-1].split('.')[0]) for loss in current_checkpoints if "parameters" not in loss]
+        if any([loss_checkpoint > self.total_loss_epoch/self.n_iter for loss_checkpoint in current_loss_checkpoint]):
+            if len(current_checkpoints):
+                [os.remove(os.path.join(self.dump_path, file)) for file in current_checkpoints if "parameters" not in file]
+        mdl_to_save = self.student.model if hasattr(self.student.model, "modules") else self.student
+        state_dict = mdl_to_save.state_dict()
+        torch.save(state_dict, os.path.join(self.dump_path, checkpoint_name))
+    
+    def evaluate(self):
+        self.student.eval()
+        self.teacher.eval()
+        
+        # we randomly select the pool of neurons to interchange.
+        selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
+        interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
+        teacher_variable_names = random.choice(interchange_variable_mapping[0])
+        student_variable_names = random.choice(interchange_variable_mapping[1])
+
+        teacher_interchanged_variables_mapping = {}
+        student_interchanged_variables_mapping = {}
+        # we store the interchange here.
+        for i, variable in enumerate(teacher_variable_names):
+            layer_index, LOC = parse_variable_name(variable)
+            if layer_index in teacher_interchanged_variables_mapping:
+                teacher_interchanged_variables_mapping[layer_index] += [(i, LOC)]
+            else:
+                teacher_interchanged_variables_mapping[layer_index] = [(i, LOC)]
+        for i, variable in enumerate(student_variable_names):
+            layer_index, LOC = parse_variable_name(variable)
+            if layer_index in student_interchanged_variables_mapping:
+                student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
+            else:
+                student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
+        ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
+                                            student_variable_names, student_interchanged_variables_mapping)
+        beh_acc = self.beh_accuracy()
+        logger.info(f"------------ II ACCURACY {ii_acc}")
+
+        logger.info(f"------------- BEH ACCURACY {beh_acc}")
 
     def ii_accuracy(self,
                     teacher_variable_names, teacher_interchanged_variables_mapping,
@@ -393,7 +484,6 @@ class Trainer:
         labels = []
         predictions = []
         with torch.no_grad():
-            self.student.eval()
             for batch in self.val_dataloader:
                 x, _, batch_labels = batch
                 source = x[0,:]
@@ -438,7 +528,6 @@ class Trainer:
         labels = []
         predictions = []
         with torch.no_grad():
-            self.student.eval()
             for batch in self.val_dataloader:
                 x, _, batch_labels = batch
                 source = x[0,:]
@@ -475,28 +564,6 @@ class Trainer:
 
             return np.sum(np.equal(predictions,labels))/len(labels)
         
-    
-    def end_epoch(self):
-        """
-        Finally arrived at the end of epoch (full pass on dataset).
-        Do some tensorboard logging and checkpoint saving.
-        """
-
-        self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}_loss_{self.total_loss_epoch/self.n_iter:.2f}_ii_acc_{self.total_ii_acc_epoch/self.n_iter:.2f}_beh_acc_{self.total_beh_acc_epoch/self.n_iter:.2f}.pth")
-
-        self.epoch += 1
-        self.n_iter = 0
-        self.total_loss_epoch = 0
-        self.total_ii_acc_epoch = 0
-        self.total_beh_acc_epoch = 0
-
-    def save_checkpoint(self, checkpoint_name: str = "checkpoint.pth"):
-        """
-        Save the current state. Only by the master process.
-        """
-        mdl_to_save = self.student.model if hasattr(self.student.model, "modules") else self.student
-        state_dict = mdl_to_save.state_dict()
-        torch.save(state_dict, os.path.join(self.dump_path, checkpoint_name))
 
 def prepare_trainer(args):
 
@@ -559,7 +626,7 @@ if __name__ == "__main__":
         default="training_configs/MNIST.nm",
         help="Predefined neuron mapping for the interchange experiment.",
     )
-    parser.add_argument("--n_epoch", type=int, default=5, help="Number of pass on the whole dataset.")
+    parser.add_argument("--n_epoch", type=int, default=1250, help="Number of pass on the whole dataset.")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -581,5 +648,7 @@ if __name__ == "__main__":
     trainer = prepare_trainer(args)
     logger.info("Start training.")
     trainer.train()
+
+    trainer.evaluate()
 
 

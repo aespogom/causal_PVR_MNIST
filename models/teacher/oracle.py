@@ -54,7 +54,6 @@ class Oracle(nn.Module):
         teacher_ouputs = {}
         teacher_ouputs["hidden_states"]=[]
         # we perform the interchange intervention
-        hooks = []
         for i, x in enumerate(list_inputs):
             x = self.oracle_look_up_table(i, look_up)
             # we need to interchange!
@@ -75,8 +74,5 @@ class Oracle(nn.Module):
         tensor_preds = torch.zeros((1,10))
         tensor_preds[0,FO.item()]=1
         teacher_ouputs["outputs"]=tensor_preds
-
-        for h in hooks:
-            h.remove()
 
         return teacher_ouputs

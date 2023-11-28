@@ -2,7 +2,6 @@ import torch
 import torchvision.models as models
 from torch import nn
 from counterfactual_utils import interchange_hook
-from utils import _get_value
 
 ## STUDENT MODEL
 class ResNet18(nn.Module):
@@ -81,13 +80,12 @@ class ResNet18(nn.Module):
         if causal_t_outputs is None:
             # if it is None, it is simply a forward for getting hidden states!
             if t_outputs is not None:
-                s_outputs, _ = student_output["outputs"], student_output["hidden_states"]
+                s_outputs = student_output["outputs"]
                 loss = self.loss(s_outputs, t_outputs)
                 student_output["loss"] = loss
         else:
             # causal loss.
-            causal_s_outputs, _ = \
-                student_output["outputs"], student_output["hidden_states"]
+            causal_s_outputs = student_output["outputs"]
             loss = self.loss(causal_s_outputs, causal_t_outputs)
             student_output["loss"] = loss
 

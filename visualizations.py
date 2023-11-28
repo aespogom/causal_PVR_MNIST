@@ -20,7 +20,7 @@ plt.xlabel('Steps')
 plt.ylabel('Loss')
  
 # Set the tick locations
-plt.xticks(arange(0, len(train_loss)+1, 2))
+plt.xticks(arange(0, len(train_loss)+1, 5000))
  
 # Display the plot
 plt.legend(loc='best')
