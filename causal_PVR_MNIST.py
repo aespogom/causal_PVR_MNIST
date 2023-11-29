@@ -313,7 +313,7 @@ class Trainer:
         dual_s_outputs = dual_student_outputs["outputs"]
         causal_t_outputs = counterfactual_outputs_teacher["outputs"]
         ## HERE ANA IS THIS A BUG IN ORIGINAL CODE??? they are using counterfactual_outputs_teacher instead of dual_counterfactual_outputs_teacher
-        dual_causal_t_outputs = counterfactual_outputs_teacher["outputs"]
+        dual_causal_t_outputs = dual_counterfactual_outputs_teacher["outputs"]
         
         # Loss_ce
         loss_ce = student_outputs["loss"]
@@ -436,9 +436,9 @@ class Trainer:
         Save the current state. Only by the master process.
         """
         current_checkpoints = os.listdir(self.dump_path)
-        current_loss_checkpoint = [int(loss.split('_')[-1].split('.')[0]) for loss in current_checkpoints if "parameters" not in loss]
-        if any([loss_checkpoint > self.total_loss_epoch/self.n_iter for loss_checkpoint in current_loss_checkpoint]):
-            if len(current_checkpoints):
+        current_loss_checkpoint = [float(loss.split('_')[-1].split('.pth')[0]) for loss in current_checkpoints if "parameters" not in loss]
+        if any([loss_checkpoint >= self.total_loss_epoch/self.n_iter for loss_checkpoint in current_loss_checkpoint]):
+            if len(current_checkpoints)>0:
                 [os.remove(os.path.join(self.dump_path, file)) for file in current_checkpoints if "parameters" not in file]
         mdl_to_save = self.student.model if hasattr(self.student.model, "modules") else self.student
         state_dict = mdl_to_save.state_dict()
