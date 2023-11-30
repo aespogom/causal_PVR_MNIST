@@ -21,11 +21,14 @@ from models.teacher import oracle as teacher
 from utils import logger, set_seed
 from transformers import get_linear_schedule_with_warmup
 
+from sklearn.metrics import classification_report
+import warnings
+warnings.filterwarnings('ignore')  # "error", "ignore", "always", "default", "module" or "once"
+
 ## EARLY STOPPER
 class EarlyStopper:
-    def __init__(self, patience=5, min_delta=0.001):
+    def __init__(self, patience=5):
         self.patience = patience
-        self.min_delta = min_delta
         self.counter = 0
         self.min_validation_loss = float('inf')
 
@@ -33,10 +36,15 @@ class EarlyStopper:
         if validation_loss < self.min_validation_loss:
             self.min_validation_loss = validation_loss
             self.counter = 0
-        elif validation_loss > (self.min_validation_loss + self.min_delta):
+        elif validation_loss > self.min_validation_loss:
             self.counter += 1
+            logger.info(f"Early stop counter has increased to {str(self.counter)}")
             if self.counter >= self.patience:
+                logger.info("Early stop counter has reached patient!!!!")
                 return True
+        if validation_loss < 0.001:
+            logger.info("Early stop has reached min loss defined as 0.001 !!!!")
+            self.counter += self.patience
         return False
 
 ## TRAINER
@@ -142,7 +150,7 @@ class Trainer:
         self.scheduler = get_linear_schedule_with_warmup(
             self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_train_optimization_steps
         )
-        self.early_stopper = EarlyStopper(patience=3, min_delta=10)
+        self.early_stopper = EarlyStopper(patience=params.patience)
 
     def train(self):
         """
@@ -152,10 +160,11 @@ class Trainer:
         self.last_log = time.time()
         self.teacher.eval()
         self.student.train()
+        self.optimizer.zero_grad()
 
         for _ in range(self.params.n_epoch):
             logger.info(f"--- Starting epoch {self.epoch}/{self.params.n_epoch-1}")
-            iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
+            iter_bar = tqdm(self.dataloader, desc="-Iter")
             for batch in iter_bar:
                 x, value, batch_labels = batch
                 source = x[0,:]
@@ -164,12 +173,6 @@ class Trainer:
                 base = x[-1,:]
                 base_labels = value[-1]
                 look_up_base = batch_labels[-1,:]
-
-                if self.params.n_gpu > 0:
-                    # x = x.to(f"cuda:0", non_blocking=True)
-                    # value = value.to(f"cuda:0", non_blocking=True)
-                    # Until Snellius is available, we skip this
-                    pass
 
                 self.step(
                     source_ids=source,
@@ -180,19 +183,18 @@ class Trainer:
                     look_up_base=look_up_base
                 )
                 iter_bar.update()
-                iter_bar.set_postfix(
-                    {
-                        "Last_loss": f"{self.last_loss:.2f}", 
-                        "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
-                        # "Last_ii_acc": f'{self.last_ii_acc:.2f}',
-                        # "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
-                        # "Last_beh_acc": f'{self.last_beh_acc:.2f}',
-                        # "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
-                        "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
-                        "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
-                    }
-                )
-
+            iter_bar.set_postfix(
+                {
+                    "Last_loss": f"{self.last_loss:.2f}", 
+                    "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
+                    # "Last_ii_acc": f'{self.last_ii_acc:.2f}',
+                    # "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
+                    # "Last_beh_acc": f'{self.last_beh_acc:.2f}',
+                    # "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
+                    "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
+                    "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
+                }
+            )
             iter_bar.close()
             logger.info(f"--- Ending epoch {self.epoch}/{self.params.n_epoch-1}")
             if self.early_stopper.early_stop(self.total_loss_epoch/self.n_iter):
@@ -436,10 +438,10 @@ class Trainer:
         Save the current state. Only by the master process.
         """
         current_checkpoints = os.listdir(self.dump_path)
-        current_loss_checkpoint = [float(loss.split('_')[-1].split('.pth')[0]) for loss in current_checkpoints if "parameters" not in loss]
-        if any([loss_checkpoint >= self.total_loss_epoch/self.n_iter for loss_checkpoint in current_loss_checkpoint]):
+        current_loss_checkpoint = [float(loss.split('_')[-1].split('.pth')[0]) for loss in current_checkpoints if "model_epoch" in loss]
+        if all([loss_checkpoint >= self.total_loss_epoch/self.n_iter for loss_checkpoint in current_loss_checkpoint]):
             if len(current_checkpoints)>0:
-                [os.remove(os.path.join(self.dump_path, file)) for file in current_checkpoints if "parameters" not in file]
+                [os.remove(os.path.join(self.dump_path, file)) for file in current_checkpoints if "model_epoch" in file]
         mdl_to_save = self.student.model if hasattr(self.student.model, "modules") else self.student
         state_dict = mdl_to_save.state_dict()
         torch.save(state_dict, os.path.join(self.dump_path, checkpoint_name))
@@ -447,44 +449,49 @@ class Trainer:
     def evaluate(self):
         self.student.eval()
         self.teacher.eval()
-        
-        # we randomly select the pool of neurons to interchange.
-        selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
-        interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
-        teacher_variable_names = random.choice(interchange_variable_mapping[0])
-        student_variable_names = random.choice(interchange_variable_mapping[1])
-
-        teacher_interchanged_variables_mapping = {}
-        student_interchanged_variables_mapping = {}
-        # we store the interchange here.
-        for i, variable in enumerate(teacher_variable_names):
-            layer_index, LOC = parse_variable_name(variable)
-            if layer_index in teacher_interchanged_variables_mapping:
-                teacher_interchanged_variables_mapping[layer_index] += [(i, LOC)]
-            else:
-                teacher_interchanged_variables_mapping[layer_index] = [(i, LOC)]
-        for i, variable in enumerate(student_variable_names):
-            layer_index, LOC = parse_variable_name(variable)
-            if layer_index in student_interchanged_variables_mapping:
-                student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
-            else:
-                student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
-        ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
-                                            student_variable_names, student_interchanged_variables_mapping)
+        current_checkpoints = os.listdir(self.dump_path)
+        current_loss_checkpoint = [float(loss.split('_')[-1].split('.pth')[0]) for loss in current_checkpoints if "model_epoch" in loss]
+        min_loss = min(current_loss_checkpoint)
+        best_checkpoint = [checkpoint for checkpoint in current_checkpoints if str(min_loss) in checkpoint][0]
+        self.student.model.load_state_dict(torch.load(os.path.join(self.dump_path,best_checkpoint)))
+        ii_acc = self.ii_accuracy()
         beh_acc = self.beh_accuracy()
         logger.info(f"------------ II ACCURACY {ii_acc}")
 
         logger.info(f"------------- BEH ACCURACY {beh_acc}")
 
-    def ii_accuracy(self,
-                    teacher_variable_names, teacher_interchanged_variables_mapping,
-                    student_variable_names, student_interchanged_variables_mapping):
+    def ii_accuracy(self):
         """ Interchange intervention accuracy quantifies the extent to which the interpretable
         causal model is a proxy for the network"""
+
+        
         labels = []
         predictions = []
         with torch.no_grad():
             for batch in self.val_dataloader:
+
+                # we randomly select the pool of neurons to interchange.
+                selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
+                interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
+                teacher_variable_names = random.choice(interchange_variable_mapping[0])
+                student_variable_names = random.choice(interchange_variable_mapping[1])
+
+                teacher_interchanged_variables_mapping = {}
+                student_interchanged_variables_mapping = {}
+                # we store the interchange here.
+                for i, variable in enumerate(teacher_variable_names):
+                    layer_index, LOC = parse_variable_name(variable)
+                    if layer_index in teacher_interchanged_variables_mapping:
+                        teacher_interchanged_variables_mapping[layer_index] += [(i, LOC)]
+                    else:
+                        teacher_interchanged_variables_mapping[layer_index] = [(i, LOC)]
+                for i, variable in enumerate(student_variable_names):
+                    layer_index, LOC = parse_variable_name(variable)
+                    if layer_index in student_interchanged_variables_mapping:
+                        student_interchanged_variables_mapping[layer_index] += [(i, LOC)]
+                    else:
+                        student_interchanged_variables_mapping[layer_index] = [(i, LOC)]
+
                 x, _, batch_labels = batch
                 source = x[0,:]
                 look_up_source = batch_labels[0,:]
@@ -521,6 +528,9 @@ class Trainer:
                 # Get the neural model's prediction with the intervention:
                 pred = nn.Softmax(dim=1)(outputs_student['outputs']).argmax(dim=1)
                 predictions.append(int(pred))
+
+            logger.info("Counterfactual evaluation")
+            logger.info(classification_report(labels, predictions))
             return np.sum(np.equal(predictions,labels))/len(labels)
     
     def beh_accuracy(self):
@@ -562,6 +572,8 @@ class Trainer:
                 pred = nn.Softmax(dim=1)(outputs_student['outputs']).argmax(dim=1)
                 predictions.append(int(pred))
 
+            logger.info("\nStandard evaluation")
+            logger.info(classification_report(labels, predictions))
             return np.sum(np.equal(predictions,labels))/len(labels)
         
 
@@ -590,7 +602,7 @@ def prepare_trainer(args):
     logger.info("Teacher loaded.")
 
     # DATA LOADER
-    train_dataset, val_dataset = setup_loaders()
+    train_dataset, val_dataset = setup_loaders(args)
     logger.info("Data loader created.")
 
     # TRAINER #
@@ -613,7 +625,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Overwrite dump_path if it already exists."
     )
-
     parser.add_argument(
         "--dump_path",
         type=str,
@@ -626,18 +637,32 @@ if __name__ == "__main__":
         default="training_configs/MNIST.nm",
         help="Predefined neuron mapping for the interchange experiment.",
     )
-    parser.add_argument("--n_epoch", type=int, default=1250, help="Number of pass on the whole dataset.")
+    parser.add_argument("--n_epoch", type=int, default=1, help="Number of pass on the whole dataset.")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=1,
+        default=250,
         help="Gradient accumulation for larger training batches.",
     )
-    parser.add_argument("--n_gpu", type=int, default=1, help="Number of GPUs in the node.")
-    parser.add_argument("--local_rank", type=int, default=0, help="Distributed training - Local rank")
+    parser.add_argument(
+        "--batch_train",
+        type=int,
+        default=500,
+        help="Batch size for training.",
+    )
+    parser.add_argument(
+        "--batch_val",
+        type=int,
+        default=500,
+        help="Batch size for validation.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=20,
+        help="Patience for early stopper.",
+    )
 
-    parser.add_argument("--log_interval", type=int, default=500, help="Tensorboard logging interval.")
-    parser.add_argument("--checkpoint_interval", type=int, default=4000, help="Checkpoint interval.")
     
     args = parser.parse_args()
     
