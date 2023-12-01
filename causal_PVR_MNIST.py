@@ -183,18 +183,18 @@ class Trainer:
                     look_up_base=look_up_base
                 )
                 iter_bar.update()
-            iter_bar.set_postfix(
-                {
-                    "Last_loss": f"{self.last_loss:.2f}", 
-                    "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
-                    # "Last_ii_acc": f'{self.last_ii_acc:.2f}',
-                    # "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
-                    # "Last_beh_acc": f'{self.last_beh_acc:.2f}',
-                    # "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
-                    "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
-                    "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
-                }
-            )
+                iter_bar.set_postfix(
+                    {
+                        # "Last_loss": f"{self.last_loss:.2f}", 
+                        "Avg_cum_loss": f"{self.total_loss_epoch/self.n_iter:.2f}",
+                        # "Last_ii_acc": f'{self.last_ii_acc:.2f}',
+                        # "Avg_cum_ii_acc": f"{self.total_ii_acc_epoch/self.n_iter:.2f}",
+                        # "Last_beh_acc": f'{self.last_beh_acc:.2f}',
+                        # "Avg_cum_beh_acc": f"{self.total_beh_acc_epoch/self.n_iter:.2f}",
+                        "Last_t_efficacy": f"{self.last_teacher_interchange_efficacy:.2f}",
+                        "Last_s_efficacy": f"{self.last_student_interchange_efficacy:.2f}"
+                    }
+                )
             iter_bar.close()
             logger.info(f"--- Ending epoch {self.epoch}/{self.params.n_epoch-1}")
             if self.early_stopper.early_stop(self.total_loss_epoch/self.n_iter):
@@ -381,15 +381,6 @@ class Trainer:
         self.last_loss_causal_ce = causal_loss_ce.item()
         
         self.optimize(loss)
-        # check double optimize
-        # plot losses: if loss IIT is lower than regular, then II is not learning
-        ## in that case increase importance loss IIT (temperature??)
-
-        # self.last_ii_acc = self.ii_accuracy(teacher_variable_names, teacher_interchanged_variables_mapping,
-        #                                     student_variable_names, student_interchanged_variables_mapping)
-        # self.last_beh_acc = self.beh_accuracy()
-        # self.total_ii_acc_epoch += self.last_ii_acc
-        # self.total_beh_acc_epoch += self.last_beh_acc
 
 
     def optimize(self, loss):
@@ -583,7 +574,8 @@ def prepare_trainer(args):
     args.seed=56
     set_seed(args)
     
-    shutil.rmtree(args.dump_path)
+    if os.path.exists(args.dump_path):
+        shutil.rmtree(args.dump_path)
 
     if not os.path.exists(args.dump_path):
         os.makedirs(args.dump_path)
@@ -637,7 +629,7 @@ if __name__ == "__main__":
         default="training_configs/MNIST.nm",
         help="Predefined neuron mapping for the interchange experiment.",
     )
-    parser.add_argument("--n_epoch", type=int, default=1, help="Number of pass on the whole dataset.")
+    parser.add_argument("--n_epoch", type=int, default=800, help="Number of pass on the whole dataset.")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -653,7 +645,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--batch_val",
         type=int,
-        default=500,
+        default=1000,
         help="Batch size for validation.",
     )
     parser.add_argument(
@@ -672,7 +664,7 @@ if __name__ == "__main__":
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     trainer = prepare_trainer(args)
     logger.info("Start training.")
-    trainer.train()
+    # trainer.train()
 
     trainer.evaluate()
 
