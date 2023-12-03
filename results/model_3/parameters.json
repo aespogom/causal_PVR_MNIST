@@ -1,0 +1,12 @@
+{
+    "force": false,
+    "dump_path": "results\\s_resnet18_t_oracle_data_MNIST_seed_56",
+    "neuro_mapping": "training_configs/MNIST.nm",
+    "n_epoch": 800,
+    "gradient_accumulation_steps": 250,
+    "batch_train": 500,
+    "batch_val": 500,
+    "patience": 20,
+    "run_name": "s_resnet18_t_oracle_data_MNIST_seed_56",
+    "seed": 56
+}

@@ -633,13 +633,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=250,
+        default=500,
         help="Gradient accumulation for larger training batches.",
     )
     parser.add_argument(
         "--batch_train",
         type=int,
-        default=500,
+        default=1000,
         help="Batch size for training.",
     )
     parser.add_argument(
@@ -664,8 +664,7 @@ if __name__ == "__main__":
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     trainer = prepare_trainer(args)
     logger.info("Start training.")
-    # trainer.train()
-
+    trainer.train()
     trainer.evaluate()
 
 
