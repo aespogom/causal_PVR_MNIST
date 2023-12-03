@@ -11,6 +11,7 @@ This is my (unofficial) implementation and evaluation of PVR-MNIST example on
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+- [Results](#results)
 - [Usage](#usage)
 - [Contributing](#contributing)
   - [Reporting](#reporting-issues)
@@ -45,9 +46,21 @@ Provide step-by-step instructions on how to install and set up the project. Incl
   pip install -r requirements.txt
   ```
 5. **Run the project**
+   You can run the following line with the default parameters to get the results of model_04, which resembles A. Geiger et al results.
   ```
   python -m causal_PVR_MNIST.py
   ```
+
+## Results
+
+| Model Name      | Final epoch | Train size | Validation size | Gradient Accumulation Step | Seed | II Accuracy | Behaviour Accuracy | Final Loss |
+|-----------------|--------------|------------|-----------------|----------------------------|------|-------------|--------------------|------------|
+| Model 1         |     450      |	  100     |	      50        |             50     	       |  56  |	    0,60    |	        0,90       |	   0,00   |
+| Model 2         |     114      |	  300     |	      150       |             150            |  56  |	    0,64    |	        0,74       |	   0,11   |
+| Model 3         |     133      |	  500     |	      250       |             250     	     |  56  |	    0,92    |	        0,91       |	   0,03   |
+| **Model 4**         |     101      |	  1000    |	      1000      |             500     	     |  56  |	    **0,93**    |	        **0,94**       |	   **0,03**   |
+
+
 
 ## Usage
 
